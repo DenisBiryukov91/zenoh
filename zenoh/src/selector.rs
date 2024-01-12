@@ -17,6 +17,7 @@
 use zenoh_protocol::core::key_expr::{keyexpr, OwnedKeyExpr};
 use zenoh_result::ZResult;
 pub use zenoh_util::time_range::{TimeBound, TimeExpr, TimeRange};
+pub use zenoh_util::projection_rule::ProjectionRule;
 
 use crate::{prelude::KeyExpr, queryable::Query};
 
@@ -71,6 +72,7 @@ pub struct Selector<'a> {
 }
 
 pub const TIME_RANGE_KEY: &str = "_time";
+pub const PROJECT_KEY: &str = "_project";
 impl<'a> Selector<'a> {
     /// Gets the parameters as a raw string.
     pub fn parameters(&self) -> &str {
@@ -401,6 +403,19 @@ pub trait Parameters<'a> {
         <Self::Decoder as Iterator>::Item: Parameter,
     {
         Ok(match &self.get_parameters([TIME_RANGE_KEY])?[0] {
+            Some(s) => Some(s.as_ref().parse()?),
+            None => None,
+        })
+    }
+
+    /// Extracts the standardized `_proj` argument from the selector parameters.
+    ///
+    /// The default implementation still causes a complete pass through the selector parameters to ensure that there are no duplicates of the `_project` key.
+    fn projection_rule(&'a self) -> ZResult<Option<ProjectionRule>>
+    where
+        <Self::Decoder as Iterator>::Item: Parameter,
+    {
+        Ok(match &self.get_parameters([PROJECT_KEY])?[0] {
             Some(s) => Some(s.as_ref().parse()?),
             None => None,
         })

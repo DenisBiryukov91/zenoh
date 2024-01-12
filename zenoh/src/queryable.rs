@@ -181,11 +181,19 @@ impl<'a> Resolvable for ReplyBuilder<'a> {
 impl SyncResolve for ReplyBuilder<'_> {
     fn res_sync(self) -> <Self as Resolvable>::To {
         match self.result {
-            Ok(sample) => {
+            Ok(mut sample) => {
                 if !self.query._accepts_any_replies().unwrap_or(false)
                     && !self.query.key_expr().intersects(&sample.key_expr)
                 {
                     bail!("Attempted to reply on `{}`, which does not intersect with query `{}`, despite query only allowing replies on matching key expressions", sample.key_expr, self.query.key_expr())
+                }
+                if let Ok(Some(projection_rule)) = self.query.selector().projection_rule() {
+                    match sample.value.project(&projection_rule) {
+                        Ok(projected_sample) => { sample.value = projected_sample; }
+                        Err(e) =>  { 
+                            bail!("Failed to apply projection rule: {}", e.to_string());
+                        }
+                    }
                 }
                 let Sample {
                     key_expr,

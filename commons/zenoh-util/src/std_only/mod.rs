@@ -2,6 +2,7 @@ pub mod ffi;
 mod lib_loader;
 pub mod net;
 pub mod time_range;
+pub mod projection_rule;
 pub use lib_loader::*;
 pub mod timer;
 pub use timer::*;

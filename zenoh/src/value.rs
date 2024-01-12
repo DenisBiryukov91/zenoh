@@ -15,18 +15,24 @@
 //! Value primitives.
 
 use base64::{engine::general_purpose::STANDARD as b64_std_engine, Engine};
+use zenoh_buffers::buffer::Buffer;
 use std::borrow::Cow;
+use std::cmp::min;
 use std::convert::TryFrom;
 #[cfg(feature = "shared-memory")]
 use std::sync::Arc;
 
 use zenoh_collections::Properties;
-use zenoh_result::ZError;
+use zenoh_result::{ZError, ZResult};
+use zenoh_util::projection_rule::ProjectionRule;
 
 use crate::buffers::ZBuf;
 use crate::prelude::{Encoding, KnownEncoding, Sample, SplitBuffer};
 #[cfg(feature = "shared-memory")]
 use zenoh_shm::SharedMemoryBuf;
+
+pub const PROJECTION_SLICE: &str = "slice";
+pub const PROJECTION_PICK: &str = "pick";
 
 /// A zenoh Value.
 #[non_exhaustive]
@@ -60,6 +66,49 @@ impl Value {
     pub fn encoding(mut self, encoding: Encoding) -> Self {
         self.encoding = encoding;
         self
+    }
+
+    pub fn project(&self, projection_rule: &ProjectionRule) -> ZResult<Self> {
+        match projection_rule.op.as_str() {
+            PROJECTION_SLICE => self.project_slice(&projection_rule.args),
+            _ => bail!("Unsupported projection rule: '{}'", projection_rule.op.as_str())
+        }
+    }
+
+    fn project_slice(&self, args: &Vec<String>) -> ZResult<Self> {
+        if args.len() != 2 {
+            bail!(
+                "Projection rule '{}', must have 2 positive integer arguments: offset and length",
+                PROJECTION_SLICE
+            )
+        }
+        let offset = usize::from_str_radix(args[0].as_str(), 10)?;
+        let length = usize::from_str_radix(args[1].as_str(), 10)?;
+        match self.encoding {
+            Encoding::APP_OCTET_STREAM => {
+                let buf_len = self.payload.len();
+                let start = min(offset, buf_len);
+                let end = min(offset + length, buf_len);
+                let mut v: Vec<u8> = Vec::with_capacity(end - start);
+                v.copy_from_slice(&self.payload.contiguous()[start..end]);
+                Ok(Value::from(v))
+            } 
+            Encoding::TEXT_PLAIN => {
+                let mut s = String::try_from(self).unwrap();
+                let start = min(offset, s.len());
+                let end = min(offset + length, s.len());
+                s = s[start..end].to_string();
+                Ok(Value::from(s))
+            }
+            _ => {
+                bail!(
+                    "Projection rule '{}' is not supported for encoding {}",
+                    PROJECTION_SLICE,
+                    self.encoding
+                )
+            }
+        }
+
     }
 }
 
@@ -649,7 +698,7 @@ impl TryFrom<&Value> for serde_json::Value {
     fn try_from(v: &Value) -> Result<Self, Self::Error> {
         match v.encoding.prefix() {
             KnownEncoding::AppJson | KnownEncoding::TextJson => {
-                let r = serde::Deserialize::deserialize(&mut serde_json::Deserializer::from_slice(
+                let r: Result<serde_json::Value, serde_json::Error> = serde::Deserialize::deserialize(&mut serde_json::Deserializer::from_slice(
                     &v.payload.contiguous(),
                 ));
                 r.map_err(|e| zerror!("{}", e))
