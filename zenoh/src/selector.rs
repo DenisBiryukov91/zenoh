@@ -17,7 +17,7 @@
 use zenoh_protocol::core::key_expr::{keyexpr, OwnedKeyExpr};
 use zenoh_result::ZResult;
 pub use zenoh_util::time_range::{TimeBound, TimeExpr, TimeRange};
-pub use zenoh_util::projection_rule::ProjectionRule;
+pub use zenoh_util::projection::ProjectionRule;
 
 use crate::{prelude::KeyExpr, queryable::Query};
 

@@ -52,6 +52,7 @@ shellexpand = { workspace = true }
 zenoh-core = { workspace = true }
 zenoh-protocol = { workspace = true, features = ["default"] }
 zenoh-result = { workspace = true, features = ["default"] }
+serde_json = { workspace = true}
 
 [target.'cfg(windows)'.dependencies]
 winapi = { workspace = true }

@@ -4695,6 +4695,7 @@ dependencies = [
  "log",
  "rand 0.8.5",
  "rustc_version 0.4.0",
+ "serde_json",
  "zenoh",
  "zenoh-ext",
 ]
@@ -5133,6 +5134,7 @@ dependencies = [
  "log",
  "pnet",
  "pnet_datalink",
+ "serde_json",
  "shellexpand",
  "winapi",
  "zenoh-core",

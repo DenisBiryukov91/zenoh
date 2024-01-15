@@ -26,7 +26,7 @@ use std::sync::Arc;
 
 use zenoh_collections::Properties;
 use zenoh_result::{ZError, ZResult};
-use zenoh_util::projection_rule::ProjectionRule;
+use zenoh_util::projection::{ProjectionRule, JsonFieldsTree};
 
 use crate::buffers::ZBuf;
 use crate::prelude::{Encoding, KnownEncoding, Sample, SplitBuffer};
@@ -73,6 +73,7 @@ impl Value {
     pub fn project(&self, projection_rule: &ProjectionRule) -> ZResult<Self> {
         match projection_rule.op.as_str() {
             PROJECTION_SLICE => self.project_slice(&projection_rule.args),
+            PROJECTION_PICK => self.project_pick(&projection_rule.args),
             _ => bail!("Unsupported projection rule: '{}'", projection_rule.op.as_str())
         }
     }
@@ -122,7 +123,33 @@ impl Value {
                 )
             }
         }
+    }
 
+    fn project_pick(&self, args: &Vec<String>) -> ZResult<Self>  {
+        match self.encoding {
+            Encoding::APP_JSON | Encoding::TEXT_JSON => {
+                match serde_json::Value::try_from(self) {
+                    Ok(mut js) => {
+                        let mut t = JsonFieldsTree::new();
+                        for a in args {
+                            t.insert(a.split('/').collect::<Vec<&str>>().as_slice());
+                        }
+                        if !t.is_empty() {
+                            t.project_json(&mut js);
+                        }
+                        Ok(Value::from(js))
+                    },
+                    Err(e) => bail!("Payload is not a valid json: {}", &e)
+                }
+            },
+            _ => {
+                bail!(
+                    "Projection rule '{}' is not supported for encoding {}",
+                    PROJECTION_PICK,
+                    self.encoding
+                )
+            }
+        }
     }
 }
 
