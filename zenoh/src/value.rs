@@ -19,6 +19,8 @@ use zenoh_buffers::buffer::Buffer;
 use std::borrow::Cow;
 use std::cmp::min;
 use std::convert::TryFrom;
+use std::str;
+use unicode_segmentation::UnicodeSegmentation;
 #[cfg(feature = "shared-memory")]
 use std::sync::Arc;
 
@@ -89,16 +91,28 @@ impl Value {
                 let buf_len = self.payload.len();
                 let start = min(offset, buf_len);
                 let end = min(offset + length, buf_len);
-                let mut v: Vec<u8> = Vec::with_capacity(end - start);
-                v.copy_from_slice(&self.payload.contiguous()[start..end]);
-                Ok(Value::from(v))
+                Ok(Value::from(&self.payload.contiguous()[start..end]))
             } 
             Encoding::TEXT_PLAIN => {
-                let mut s = String::try_from(self).unwrap();
-                let start = min(offset, s.len());
-                let end = min(offset + length, s.len());
-                s = s[start..end].to_string();
-                Ok(Value::from(s))
+                if length == 0 {
+                   return Ok(Value::from(""))
+                }
+                match str::from_utf8(&self.payload.contiguous()) {
+                    Ok(s) => {
+                        let buf_len = s.len();
+                        let mut grapheme_indicies = s.grapheme_indices(true);
+                        let start = match grapheme_indicies.nth(offset) {
+                            Some(gi) => gi.0,
+                            None => buf_len
+                        };
+                        let end = match grapheme_indicies.nth(length - 1) {
+                            Some(gi) => gi.0,
+                            None => buf_len
+                        };
+                        Ok(Value::from(&s[start..end]))
+                    }
+                    Err(_) => bail!("Payload is not a valid utf-8 string")
+                }
             }
             _ => {
                 bail!(
