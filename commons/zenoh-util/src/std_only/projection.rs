@@ -126,7 +126,113 @@ impl<'a> FieldNamesTree<'a> {
         return fields_found;
     }
 
+    pub fn get_subtree(&self, full_field_name_parts: &[&str]) -> Option<&'a FieldNamesTree> {
+        if full_field_name_parts.is_empty() { 
+            Some(self)
+        } else if self.is_empty() || self.children.as_ref().unwrap().is_empty() {
+            None
+        } else if let Some(v) = self.children.as_ref().unwrap().get(full_field_name_parts[0]) {
+            v.get_subtree(&full_field_name_parts[1..])
+        } else {
+            None
+        }
+    }
+
     pub fn is_empty(&self) -> bool {
         self.children.is_none()
     }
+}
+
+#[test]
+fn test_field_names_tree() {
+    let mut t = FieldNamesTree::new(false);
+    assert!(t.get_subtree(&["a", "b"]).is_none());
+    assert!(t.get_subtree(&[]).is_some());
+    t.insert(&[vec!["a"], vec!["b"]]);
+    assert!(t.get_subtree(&["a", "b"]).is_some());
+    assert!(t.get_subtree(&["a", "c"]).is_none());
+    assert!(t.get_subtree(&["b", "a"]).is_none());
+    t.insert(&[vec!["c"], vec!["d"], vec!["e", "f"]]);
+    assert!(t.get_subtree(&["c", "d", "e"]).is_some());
+    assert!(t.get_subtree(&["c", "d", "f"]).is_some());
+    assert!(t.get_subtree(&["c", "d", "g"]).is_none());
+}
+
+#[test]
+fn test_field_names_tree_project_json() {
+    use serde_json::json;
+    let mut t = FieldNamesTree::new(true);
+    let js = json!({
+        "data": "data",
+        "nested": {
+            "a": 1,
+            "b": 2,
+            "c": {
+                "d": [
+                    {
+                        "int": 1,
+                        "str": "abc"
+                    },
+                    {
+                        "int": 2,
+                        "str": "cde"
+                    },
+                      {
+                        "int": 3,
+                        "str": "fgh"
+                      }
+                ],
+                "e" : true,
+                "f" : "text"
+            }
+        }
+    });
+
+    let mut js2 = js.clone();
+    t.project_json(&mut js2);
+    let js2_expected = json!({});
+    assert_eq!(js2, js2_expected);
+
+    t.insert(&[vec!["data"]]);
+    let mut js2 = js.clone();
+    t.project_json(&mut js2);
+    let js2_expected = json!({"data": "data"});
+    assert_eq!(js2, js2_expected);
+
+    t.insert(&[vec!["nested"], vec!["a", "b"]]);
+    let mut js2 = js.clone();
+    t.project_json(&mut js2);
+    let js2_expected = json!({
+        "data": "data",
+        "nested": {
+            "a": 1,
+            "b": 2
+        }
+    });
+    assert_eq!(js2, js2_expected);
+
+    t.insert(&[vec!["nested"], vec!["c"], vec!["d"], vec!["int"]]);
+    let mut js2 = js.clone();
+    t.project_json(&mut js2);
+    let js2_expected = json!({
+        "data": "data",
+        "nested": {
+            "a": 1,
+            "b": 2,
+            "c": {
+                "d": [
+                    {
+                        "int": 1,
+                    },
+                    {
+                        "int": 2,
+                    },
+                    {
+                        "int": 3,
+                    }
+                ],
+            }
+        }
+    });
+    assert_eq!(js2, js2_expected);
 }
