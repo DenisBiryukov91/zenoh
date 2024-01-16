@@ -26,7 +26,7 @@ use std::sync::Arc;
 
 use zenoh_collections::Properties;
 use zenoh_result::{ZError, ZResult};
-use zenoh_util::projection::{ProjectionRule, JsonFieldsTree};
+use zenoh_util::projection::{ProjectionRule, FieldNamesTree};
 
 use crate::buffers::ZBuf;
 use crate::prelude::{Encoding, KnownEncoding, Sample, SplitBuffer};
@@ -130,14 +130,18 @@ impl Value {
             Encoding::APP_JSON | Encoding::TEXT_JSON => {
                 match serde_json::Value::try_from(self) {
                     Ok(mut js) => {
-                        let mut t = JsonFieldsTree::new();
-                        for a in args {
-                            t.insert(a.split('/').collect::<Vec<&str>>().as_slice());
+                        let mut t = FieldNamesTree::new(true);
+                        for arg in args {
+                            let mut field_name_parts = Vec::new();
+                            arg.split('.').for_each(|x| {
+                                field_name_parts.push(x.split('|').collect::<Vec<&str>>())
+                            });
+                            t.insert(field_name_parts.as_slice());
                         }
-                        if !t.is_empty() {
-                            t.project_json(&mut js);
-                        }
-                        Ok(Value::from(js))
+                        t.project_json(&mut js);
+                        let mut out = Value::from(js);
+                        out.encoding = self.encoding.clone();
+                        Ok(out)
                     },
                     Err(e) => bail!("Payload is not a valid json: {}", &e)
                 }

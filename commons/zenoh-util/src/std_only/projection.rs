@@ -65,29 +65,35 @@ fn test_parse_projection_rule() {
 }
 
 
-pub struct JsonFieldsTree<'a> {
-    pub children: Option<Box<HashMap<&'a str, JsonFieldsTree<'a>>>>
+pub struct FieldNamesTree<'a> {
+    pub children: Option<Box<HashMap<&'a str, FieldNamesTree<'a>>>>
 }
 
-impl<'a> JsonFieldsTree<'a> {
-    pub fn new() -> JsonFieldsTree<'a> {
-        JsonFieldsTree {
-            children: None
+impl<'a> FieldNamesTree<'a> {
+    pub fn new(initialize: bool) -> FieldNamesTree<'a> {
+        FieldNamesTree {
+            children: if initialize { Some(Box::new(HashMap::new())) } else { None }
         }
     }
 
-    pub fn insert(&mut self, full_field_name_parts: &[&'a str]) {
+    pub fn insert(&mut self, full_field_name_parts: &[Vec<&'a str>]) {
         if full_field_name_parts.is_empty() {
             return;
+        }
+        if full_field_name_parts[0].is_empty() {
+            // ignore empty string fields
+            self.insert(&full_field_name_parts[1..]);
         }
         if self.children.is_none() {
             self.children = Some(Box::new(HashMap::new()));
         }
-        let v = self.children.as_mut()
-            .unwrap()
-            .entry(full_field_name_parts[0])
-            .or_insert(Self::new());
-        v.insert(&full_field_name_parts[1..])
+        let children = self.children.as_mut().unwrap();
+        for f in full_field_name_parts[0].as_slice() {
+            let v = children
+                .entry(f)
+                .or_insert(Self::new(false));
+            v.insert(&full_field_name_parts[1..])
+        }
     }
 
 
@@ -107,12 +113,15 @@ impl<'a> JsonFieldsTree<'a> {
                     }
                     fields_found = fields_found || inner_fields_found;
                 }
-               
-
             }
             js_obj.retain(|key, _| {
                 children.contains_key(key.as_str()) && !non_existing_fields.contains(key.as_str())
             });
+        } else if let Some(js_ar) = json.as_array_mut() {
+            for v in js_ar.as_mut_slice() {
+                let inner_fields_found = self.project_json(v);
+                fields_found = fields_found || inner_fields_found;
+            }
         }
         return fields_found;
     }

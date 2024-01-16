@@ -70,7 +70,20 @@ async fn main() {
                             "a": 1,
                             "b": 2,
                             "c": {
-                                "d": [1, 2, 3],
+                                "d": [
+                                    {
+                                        "int": 1,
+                                        "str": "abc"
+                                    },
+                                    {
+                                        "int": 2,
+                                        "str": "cde"
+                                    },
+                                      {
+                                        "int": 3,
+                                        "str": "fgh"
+                                      }
+                                ],
                                 "e" : true,
                                 "f" : "text"
                             }
