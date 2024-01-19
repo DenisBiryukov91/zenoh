@@ -14,8 +14,502 @@
 
 
 use std::str::FromStr;
+
 use zenoh_result::{bail, ZError};
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, hash_map::Entry::Vacant, hash_map::Entry::Occupied};
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Trie<T: std::cmp::Eq + std::hash::Hash + Clone> {
+    pub children: HashMap<T, Trie<T>>
+}
+
+impl<T: std::cmp::Eq + std::hash::Hash + Clone> Trie<T> {
+    pub fn new() -> Trie<T> {
+        Trie {
+            children: HashMap::new()
+        }
+    }
+
+    pub fn append(&mut self, part: T) -> &mut Trie<T>{
+        let v = self.children.entry(part).or_insert(Trie::new());
+        v
+    }
+
+    pub fn append_sequence(&mut self, s: &[T]) {
+        if s.is_empty() {
+            return;
+        }
+        match self.children.entry(s[0].clone()) {
+            Vacant(e) => { e.insert(Trie::new()).append_sequence(&s[1..]); },
+            Occupied(mut e) => { e.get_mut().append_sequence(&s[1..])}
+        };
+    }
+
+    pub fn merge_trie(&mut self, t: Trie<T>) {
+        for (k, v) in t.children {
+            match self.children.entry(k) {
+                Vacant(e) => { e.insert(v); },
+                Occupied(mut e) => { 
+                    for (_ck, cv) in v.children {
+                        e.get_mut().merge_trie(cv);
+                    }
+                }
+            };
+        }
+    }
+
+    pub fn append_tries(&mut self, tries: &[Trie<T>]) {
+        if tries.is_empty() {
+            return;
+        }
+        if self.is_empty() {
+            self.children = tries[0].children.clone();
+            for c in self.children.values_mut() {
+                c.append_tries(&tries[1..])
+            }
+        } else {
+            for c in self.children.values_mut() {
+                c.append_tries(&tries)
+            }
+        }
+    }
+
+    pub fn get_subtree(&self, word: &[T]) ->Option<&Trie<T>> {
+        if word.is_empty() {
+            if self.is_empty() { Some(self) } else { None }
+        } else if let Some(v) = self.children.get(&word[0]) {
+            v.get_subtree(&word[1..])
+        } else {
+            None
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.children.is_empty()
+    }
+}
+
+pub mod fields_list_arg_parsing {
+    use nom::multi::separated_list1;
+    use nom::branch::alt;
+    use nom::bytes::complete::tag;
+    use nom::IResult;
+    use nom::sequence::delimited;
+    use nom::bytes::complete::take_while1;
+    use nom::combinator::map;
+    use crate::projection::Trie;
+
+
+    pub fn parse(input: &str) -> IResult<&str, Trie<&str>> {
+        let parser = delimited(
+            tag("("), 
+            separated_list1(tag(","), field_name_expr),
+            tag(")")
+        );
+        map(parser, |s| {
+            let mut t: Trie<&str> = Trie::new();
+            for st in s {
+                t.merge_trie(st);
+            }
+            t
+        })
+        (input)
+    }
+
+    fn is_non_special_character(c: char) -> bool {
+        c != '(' && c != ')' && c != '.' && c != ','
+    }
+
+    fn field_name_part(input: &str) -> IResult<&str, Trie<&str>> {
+        let parser = take_while1(is_non_special_character);
+        map(parser, |s| {
+            let mut t: Trie<&str> = Trie::new();
+            t.append(s);
+            t
+        })
+        (input)
+    }
+
+    fn field_name_expr(input: &str) -> IResult<&str, Trie<&str>> {
+        let parser = separated_list1(tag("."), alt((field_name_part, parse)));
+        map(parser, |mut s| {
+            let mut t = Trie::new();
+            std::mem::swap(&mut t, &mut s[0]);
+            t.append_tries(&s[1..]);
+            t
+        })
+        (input)
+    }
+
+    #[test]
+    fn test_parse() {
+       let t = parse("(a)").unwrap().1;
+       let mut t2 = Trie::<&str>::new();
+       t2.append_sequence(&["a"]);
+       assert_eq!(t, t2);
+
+       let t = parse("(a.b.c)").unwrap().1;
+       let mut t2 = Trie::<&str>::new();
+       t2.append_sequence(&["a", "b", "c"]);
+       assert_eq!(t, t2);
+
+       let t: Trie<&str> = parse("(a.(b,c))").unwrap().1;
+       let mut t2 = Trie::<&str>::new();
+       t2.append_sequence(&["a", "b"]);
+       t2.append_sequence(&["a", "c"]);
+       assert_eq!(t, t2);
+
+       let t = parse("(a.b.c,c.d)").unwrap().1;
+       let mut t2 = Trie::<&str>::new();
+       t2.append_sequence(&["a", "b", "c"]);
+       t2.append_sequence(&["c", "d"]);
+       assert_eq!(t, t2);
+       
+       let t = parse("((a,b).(c,d))").unwrap().1;
+       let mut t2 = Trie::<&str>::new();
+       t2.append_sequence(&["a", "c"]);
+       t2.append_sequence(&["a", "d"]);
+       t2.append_sequence(&["b", "c"]);
+       t2.append_sequence(&["b", "d"]);
+       assert_eq!(t, t2);
+
+       let t = parse("(a.(b,c.(d,e)).f)").unwrap().1;
+       let mut t2 = Trie::<&str>::new();
+       t2.append_sequence(&["a", "b", "f"]);
+       t2.append_sequence(&["a", "c", "d", "f"]);
+       t2.append_sequence(&["a", "c", "e", "f"]);
+       assert_eq!(t, t2);
+   }
+}
+
+pub mod slice_arg_parsing {
+    use nom::bytes::complete::tag;
+    use nom::sequence::{delimited, separated_pair};
+    use nom::character::complete::digit1;
+    use nom::IResult;
+    use nom::combinator::map_res;
+
+    fn num(input: &str) -> IResult<&str, usize> {
+        map_res(digit1, |s: &str| s.parse::<usize>())
+        (input)
+    }
+    pub fn parse(input: &str) -> IResult<&str, (usize, usize)> {
+        delimited(
+            tag("("), 
+            separated_pair(num, tag(","), num),
+            tag(")")
+        )
+        (input)
+    }
+
+    #[test]
+    fn test_parse() {
+       assert_eq!(parse("(1,2)"), Ok(("", (1,2))));
+       assert!(parse("(1a,2)").is_err());
+   }
+}
+
+pub mod json_look_up {
+    use core::str::CharIndices;
+    use core::iter::Peekable;
+    // use crate::projection::Trie;
+    type Err = String;
+    type Iter<'a> = Peekable<CharIndices<'a>>;
+
+    fn is_ignored(c: char) -> bool {
+        return c == ' ' || c == '\r' || c == '\n' || c == '\t';
+    }
+
+    fn skip_ignored(mut ci: Iter<'_>) -> Iter<'_> {
+        while let Some(&(_pos, c)) = ci.peek() {
+            if !is_ignored(c) { break; }
+            ci.next();
+        }
+        return ci;
+    }
+
+    fn try_parse_char(c: char, mut ci: Iter<'_>) -> Result<Option<Iter<'_>>, Err> {
+        ci = skip_ignored(ci);
+        match ci.peek() {
+            None => Err("found end of string".to_string()),
+            Some(&(_pos, cc)) => { 
+                if cc == c { ci.next(); return Ok(Some(ci)); }
+                else {return Ok(None); }
+            }
+        }    
+    }
+
+    fn try_parse_string(mut ci: Iter<'_>) -> Result<Option<Iter<'_>>, Err> {
+        ci = skip_ignored(ci);
+        match try_parse_char('"', ci)? {
+            Some(cci) => { ci = cci; },
+            None => { return Ok(None); }
+        }
+
+        let mut is_escape = false;
+        while let Some((_, c)) = ci.next() {
+            if !is_escape && c == '"' { return Ok(Some(ci)) }
+            else if is_escape { is_escape = false; }
+            else if c == '\\' { is_escape = true; }
+        }
+        return Err("incomplete string".to_string());
+    }
+
+    fn try_parse_scalar(mut ci: Iter<'_>) -> Result<Option<Iter<'_>>, Err> {
+        ci = skip_ignored(ci);
+        let mut found_character = false;
+        while let Some(&(_pos, c)) = ci.peek() {
+            if is_ignored(c) || c == ',' || c == ']' || c == '}' { 
+                return if found_character { Ok(Some(ci)) } else { Ok(None) };
+            } else {
+                found_character = true;
+            }
+            ci.next();
+        }
+        return if found_character { Ok(Some(ci)) } else { Ok(None) };
+    }
+
+    fn try_parse_object(mut ci: Iter<'_>) -> Result<Option<Iter<'_>>, Err> {
+        ci = skip_ignored(ci);
+        let mut res = try_parse_char('{', ci)?;
+        if res.is_none() { return Ok(None); };
+        ci = res.unwrap();
+        res = try_parse_char('}', ci.clone())?; // check if reached object end
+        if res.is_some() { return Ok(res); }
+        loop {
+            match try_parse_kv(ci)? {
+                Some(cci) =>{ ci = cci; },
+                None => { return Err("failed to parse key-value".to_string()); }
+            }
+            // now we either reached the end of the object, or there is at least one more kv, which should be preceded by ','
+            res = try_parse_char('}', ci.clone())?; // check if reached object end
+            if res.is_some() { return Ok(res); }
+            res = try_parse_char(',', ci)?; // check if there is next kv
+            if res.is_none() { return Err("did not find ',' or '}' after key-value".to_string()); }
+            else { ci = res.unwrap(); }
+        }
+    }
+
+    fn try_parse_array(mut ci: Iter<'_>) -> Result<Option<Iter<'_>>, Err> {
+        ci = skip_ignored(ci);
+        let mut res = try_parse_char('[', ci)?;
+        if res.is_none() { return Ok(None); };
+        ci = res.unwrap();
+        res = try_parse_char(']', ci.clone())?; // check if reached array end
+        if res.is_some() { return Ok(res); }
+        loop {
+            match try_parse_value(ci)? {
+                Some(cci) =>{ ci = cci; },
+                None => { return Err("failed to parse value".to_string()); }
+            }
+            // now we either reached the end of the array, or there is at least one value, which should be preceded by ','
+            res = try_parse_char(']', ci.clone())?; // check if reached array end
+            if res.is_some() { return Ok(res); }
+            res = try_parse_char(',', ci)?; // check if there is next value
+            if res.is_none() { return Err("did not find ',' or ']' after value".to_string()); }
+            else { ci = res.unwrap(); }
+        }
+    }
+
+    fn try_parse_value(mut ci: Iter<'_>) -> Result<Option<Iter<'_>>, Err> {
+        // we try to parse value: it is either string, scalar, object or array,
+        ci = skip_ignored(ci);
+        let mut res = try_parse_object(ci.clone())?;
+        if res.is_none() { res = try_parse_array(ci.clone())?; }
+        if res.is_none() { res = try_parse_string(ci.clone())?; }
+        if res.is_none() { res = try_parse_scalar(ci)?; }
+        if res.is_none() { Err("failed to parse value".to_string()) } else { Ok(res) }
+    }
+
+    fn try_parse_kv(mut ci: Iter<'_>) -> Result<Option<Iter<'_>>, Err> {
+        ci = skip_ignored(ci);
+        let res = try_parse_string(ci)?;
+        if res.is_none() { return Err("did not find key".to_string()); }
+        let ci = res.unwrap();
+        let res = try_parse_char(':', ci)?;
+        if res.is_none() { return Err("did not find ':'".to_string())};
+        let ci = skip_ignored(res.unwrap());
+        try_parse_value(ci)
+    }
+
+
+    #[test]
+    fn test_parse_char() {
+        let res = try_parse_char('a', "  ab".char_indices().peekable());
+        assert!(res.is_ok());
+        let res = res.unwrap();
+        assert!(res.is_some());
+        assert_eq!(res.unwrap().peek(), Some(&(3,'b')));
+
+        let res = try_parse_char('c', "  ab".char_indices().peekable());
+        assert!(res.is_ok());
+        let res = res.unwrap();
+        assert!(res.is_none());
+
+        let res = try_parse_char('c', "  ".char_indices().peekable());
+        assert!(res.is_err());
+   }
+
+   #[test]
+   fn test_parse_string() {
+       let res = try_parse_string(r#"  "abc", "#.char_indices().peekable());
+       assert!(res.is_ok());
+       let res = res.unwrap();
+       assert!(res.is_some());
+       assert_eq!(res.unwrap().peek(), Some(&(7,',')));
+
+       let res = try_parse_string(r#"  "ab\"d","#.char_indices().peekable());
+       assert!(res.is_ok());
+       let res = res.unwrap();
+       assert!(res.is_some());
+       assert_eq!(res.unwrap().peek(), Some(&(9,',')));
+
+       let res = try_parse_string(r#"  abc","#.char_indices().peekable());
+       assert!(res.is_ok());
+       let res = res.unwrap();
+       assert!(res.is_none());
+
+       let res = try_parse_string(r#"  "abc"#.char_indices().peekable());
+       assert!(res.is_err());
+  }
+
+  #[test]
+    fn test_parse_scalar() {
+        let res: Result<Option<Peekable<CharIndices<'_>>>, String> = try_parse_scalar("  abc, ".char_indices().peekable());
+        assert!(res.is_ok());
+        let res = res.unwrap();
+        assert!(res.is_some());
+        assert_eq!(res.unwrap().peek(), Some(&(5,',')));
+
+        let res = try_parse_scalar("  abc ,".char_indices().peekable());
+        assert!(res.is_ok());
+        let res = res.unwrap();
+        assert!(res.is_some());
+        assert_eq!(res.unwrap().peek(), Some(&(5,' ')));
+
+        let res = try_parse_scalar("  ".char_indices().peekable());
+        assert!(res.is_ok());
+        let res = res.unwrap();
+        assert!(res.is_none());
+    }
+
+    #[test]
+    fn test_parse_kv() {
+        let res: Result<Option<Peekable<CharIndices<'_>>>, String> = try_parse_kv(r#"  "abc" : "cde", "#.char_indices().peekable());
+        assert!(res.is_ok());
+        let res = res.unwrap();
+        assert!(res.is_some());
+        assert_eq!(res.unwrap().peek(), Some(&(15,',')));
+
+        let res = try_parse_kv(r#"  "abc": 10 "#.char_indices().peekable());
+        assert!(res.is_ok());
+        let res = res.unwrap();
+        assert!(res.is_some());
+        assert_eq!(res.unwrap().peek(), Some(&(11,' ')));
+
+        let res = try_parse_kv(r#"  "abc" "#.char_indices().peekable());
+        assert!(res.is_err());
+
+        let res = try_parse_kv(r#"  "abc" : "#.char_indices().peekable());
+        assert!(res.is_err());
+    }
+
+    #[test]
+    fn test_parse_object() {
+        let json = r#"{}$"#;
+        let res: Result<Option<Peekable<CharIndices<'_>>>, String> = try_parse_object(json.char_indices().peekable());
+        assert!(res.is_ok());
+        let res = res.unwrap();
+        assert!(res.is_some());
+        assert_eq!(res.unwrap().peek(), Some(&(json.len() - 1,'$')));
+
+        let json = r#"{
+            "key1" : "value",
+            "key2" : 10,
+            "key3" : true
+        }$"#;
+        let res: Result<Option<Peekable<CharIndices<'_>>>, String> = try_parse_object(json.char_indices().peekable());
+        assert!(res.is_ok());
+        let res = res.unwrap();
+        assert!(res.is_some());
+        assert_eq!(res.unwrap().peek(), Some(&(json.len() - 1,'$')));
+
+        let json = r#"{
+            "key1" : "value",
+            "key2" : { "inner_key1" : 1 },
+            "key3" : { "inner_key2" : "abc", "inner_key3": null }
+        }$"#;
+        let res: Result<Option<Peekable<CharIndices<'_>>>, String> = try_parse_object(json.char_indices().peekable());
+        assert!(res.is_ok());
+        let res = res.unwrap();
+        assert!(res.is_some());
+        assert_eq!(res.unwrap().peek(), Some(&(json.len() - 1,'$')));
+
+        let json = r#"{
+            "key1" : "value",
+            "key2" : 10
+            "key3" : true
+        }"#;
+        let res: Result<Option<Peekable<CharIndices<'_>>>, String> = try_parse_object(json.char_indices().peekable());
+        assert!(res.is_err());
+
+        let json = r#"{
+            "key1" : "value",
+            "key2" : 10,
+            "key3" : true
+        "#;
+        let res: Result<Option<Peekable<CharIndices<'_>>>, String> = try_parse_object(json.char_indices().peekable());
+        assert!(res.is_err());
+
+        let json = r#"{
+            "key1" : "value",
+            "key2" : { "inner_key1" : 1 },
+            "key3" : { "inner_key2" : "abc", "inner_key3": null 
+        }$"#;
+        let res: Result<Option<Peekable<CharIndices<'_>>>, String> = try_parse_object(json.char_indices().peekable());
+        assert!(res.is_err());
+    }
+
+    #[test]
+    fn test_parse_array() {
+        let json = r#"[]$"#;
+        let res: Result<Option<Peekable<CharIndices<'_>>>, String> = try_parse_array(json.char_indices().peekable());
+        assert!(res.is_ok());
+        let res = res.unwrap();
+        assert!(res.is_some());
+        assert_eq!(res.unwrap().peek(), Some(&(json.len() - 1,'$')));
+
+        let json = r#"[ "abc", 1, true]$"#;
+        let res: Result<Option<Peekable<CharIndices<'_>>>, String> = try_parse_array(json.char_indices().peekable());
+        assert!(res.is_ok());
+        let res = res.unwrap();
+        assert!(res.is_some());
+        assert_eq!(res.unwrap().peek(), Some(&(json.len() - 1,'$')));
+
+        let json = r#"[
+            10,
+            "string", 
+            {
+                "key1" : "value",
+                "key2" : { "inner_key1" : 1 },
+                "key3" : { "inner_key2" : "abc", "inner_key3": null }
+            }
+        ]$"#;
+        let res: Result<Option<Peekable<CharIndices<'_>>>, String> = try_parse_array(json.char_indices().peekable());
+        assert!(res.is_ok());
+        let res = res.unwrap();
+        assert!(res.is_some());
+        assert_eq!(res.unwrap().peek(), Some(&(json.len() - 1,'$')));
+
+        let json = r#"[1 "abc"]"#;
+        let res: Result<Option<Peekable<CharIndices<'_>>>, String> = try_parse_array(json.char_indices().peekable());
+        assert!(res.is_err());
+
+        let json = r#"[1, 2"#;
+        let res: Result<Option<Peekable<CharIndices<'_>>>, String> = try_parse_array(json.char_indices().peekable());
+        assert!(res.is_err());
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProjectionRule {
@@ -63,7 +557,6 @@ fn test_parse_projection_rule() {
     );
     assert!("".parse::<ProjectionRule>().is_err());
 }
-
 
 pub struct FieldNamesTree<'a> {
     pub children: Option<Box<HashMap<&'a str, FieldNamesTree<'a>>>>
@@ -127,7 +620,7 @@ impl<'a> FieldNamesTree<'a> {
     }
 
     pub fn get_subtree(&self, full_field_name_parts: &[&str]) -> Option<&'a FieldNamesTree> {
-        if full_field_name_parts.is_empty() { 
+        if full_field_name_parts.is_empty() {
             Some(self)
         } else if self.is_empty() || self.children.as_ref().unwrap().is_empty() {
             None

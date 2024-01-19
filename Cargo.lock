@@ -5132,6 +5132,7 @@ dependencies = [
  "libc",
  "libloading",
  "log",
+ "nom",
  "pnet",
  "pnet_datalink",
  "serde_json",
