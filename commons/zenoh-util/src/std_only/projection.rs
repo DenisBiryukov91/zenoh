@@ -209,12 +209,21 @@ pub mod slice_arg_parsing {
    }
 }
 
-pub mod json_look_up {
+pub mod json_scanner {
     use core::str::CharIndices;
     use core::iter::Peekable;
-    // use crate::projection::Trie;
+    use crate::projection::Trie;
+    use crate::projection::fields_list_arg_parsing::parse;
     type Err = String;
     type Iter<'a> = Peekable<CharIndices<'a>>;
+    type Intervals = Vec<(usize, usize)>;
+
+    fn get_pos<'a>(s: &'a str, ci: &mut Iter<'a>) -> usize {
+        match ci.peek() {
+            None => s.len(),
+            Some(&(pos, _c)) => pos
+        }
+    }
 
     fn is_ignored(c: char) -> bool {
         return c == ' ' || c == '\r' || c == '\n' || c == '\t';
@@ -269,71 +278,202 @@ pub mod json_look_up {
         return if found_character { Ok(Some(ci)) } else { Ok(None) };
     }
 
-    fn try_parse_object(mut ci: Iter<'_>) -> Result<Option<Iter<'_>>, Err> {
+    fn try_parse_object<'a, 'b>(t: &Trie<&'a str>, s: &'b str, is_top: bool, mut ci: Iter<'b>) -> Result<Option<(Iter<'b>, Intervals)>, Err> {
         ci = skip_ignored(ci);
+        let mut start = ci.clone();
         let mut res = try_parse_char('{', ci)?;
         if res.is_none() { return Ok(None); };
         ci = res.unwrap();
         res = try_parse_char('}', ci.clone())?; // check if reached object end
-        if res.is_some() { return Ok(res); }
+        if res.is_some() { return Ok(Some((res.unwrap(), Intervals::new()))); }
+        let mut intervals = vec![(get_pos(s, &mut start), get_pos(s, &mut start) + 1)];
+        let mut comma_pos: Option<usize> = None;
         loop {
-            match try_parse_kv(ci)? {
-                Some(cci) =>{ ci = cci; },
+            match try_parse_kv(t, s, ci)? {
+                Some((cci, mut inner_intervals)) => { 
+                    ci = cci;
+                    if !t.is_empty() {
+                        if !inner_intervals.is_empty() && comma_pos.is_some() && intervals.len() > 1 {
+                            intervals.push((comma_pos.unwrap(), comma_pos.unwrap() + 1))
+                        }
+                        intervals.append(&mut inner_intervals); 
+                    }
+                },
                 None => { return Err("failed to parse key-value".to_string()); }
             }
             // now we either reached the end of the object, or there is at least one more kv, which should be preceded by ','
+            ci = skip_ignored(ci);
+            let end_pos = get_pos(s, &mut ci);
             res = try_parse_char('}', ci.clone())?; // check if reached object end
-            if res.is_some() { return Ok(res); }
+            if res.is_some() {
+                if t.is_empty() && !is_top { 
+                    let mut res = res.unwrap();
+                    let end_pos = get_pos(s, &mut res);
+                    return Ok(Some((res, vec![(get_pos(s, &mut start), end_pos)]))); 
+                } else if intervals.len() == 1 && !is_top { // none of inner fields match trie -> do not copy anything
+                    return Ok(Some((res.unwrap(), Intervals::new()))); 
+                } else {
+                    intervals.push((end_pos, end_pos + 1));
+                    return Ok(Some((res.unwrap(), intervals)));
+                }
+            }
+            ci = skip_ignored(ci);
+            comma_pos = Some(get_pos(s, &mut ci));
             res = try_parse_char(',', ci)?; // check if there is next kv
             if res.is_none() { return Err("did not find ',' or '}' after key-value".to_string()); }
             else { ci = res.unwrap(); }
         }
     }
 
-    fn try_parse_array(mut ci: Iter<'_>) -> Result<Option<Iter<'_>>, Err> {
+    fn try_parse_array<'a, 'b>(t: &Trie<&'a str>, s: &'b str, is_top: bool, mut ci: Iter<'b>) -> Result<Option<(Iter<'b>, Intervals)>, Err> {
         ci = skip_ignored(ci);
+        let mut start = ci.clone();
         let mut res = try_parse_char('[', ci)?;
         if res.is_none() { return Ok(None); };
         ci = res.unwrap();
         res = try_parse_char(']', ci.clone())?; // check if reached array end
-        if res.is_some() { return Ok(res); }
+        if res.is_some() { return Ok(Some((res.unwrap(), Intervals::new()))); }
+        let mut intervals = vec![(get_pos(s, &mut start), get_pos(s, &mut start) + 1)];
+        let mut comma_pos: Option<usize> = None;
         loop {
-            match try_parse_value(ci)? {
-                Some(cci) =>{ ci = cci; },
+            match try_parse_value(t, s, false, ci)? {
+                Some((cci, mut inner_intervals)) => { 
+                    ci = cci;
+                    if !t.is_empty() {
+                        if !inner_intervals.is_empty() && comma_pos.is_some() && intervals.len() > 1 {
+                            intervals.push((comma_pos.unwrap(), comma_pos.unwrap() + 1))
+                        }
+                        intervals.append(&mut inner_intervals); 
+                    }
+                },
                 None => { return Err("failed to parse value".to_string()); }
             }
             // now we either reached the end of the array, or there is at least one value, which should be preceded by ','
+            ci = skip_ignored(ci);
+            let end_pos = get_pos(s, &mut ci);
             res = try_parse_char(']', ci.clone())?; // check if reached array end
-            if res.is_some() { return Ok(res); }
+            if res.is_some() {
+                if t.is_empty() && !is_top {
+                    let mut res = res.unwrap();
+                    let end_pos = get_pos(s, &mut res);
+                    return Ok(Some((res, vec![(get_pos(s, &mut start), end_pos)]))); 
+                } else if intervals.len() == 1 && !is_top { // none of inner fields match trie -> do not copy anything
+                    return Ok(Some((res.unwrap(), Vec::<(usize, usize)>::new())));
+                } else {
+                    intervals.push((end_pos, end_pos + 1));
+                    return Ok(Some((res.unwrap(), intervals)));
+                }
+            }
+            ci = skip_ignored(ci);
+            comma_pos = Some(get_pos(s, &mut ci));
             res = try_parse_char(',', ci)?; // check if there is next value
             if res.is_none() { return Err("did not find ',' or ']' after value".to_string()); }
             else { ci = res.unwrap(); }
         }
     }
 
-    fn try_parse_value(mut ci: Iter<'_>) -> Result<Option<Iter<'_>>, Err> {
+    fn try_parse_value<'a, 'b>(t: &Trie<&'a str>, s: &'b str, is_top: bool, mut ci: Iter<'b>) -> Result<Option<(Iter<'b>, Intervals)>, Err> {
         // we try to parse value: it is either string, scalar, object or array,
         ci = skip_ignored(ci);
-        let mut res = try_parse_object(ci.clone())?;
-        if res.is_none() { res = try_parse_array(ci.clone())?; }
-        if res.is_none() { res = try_parse_string(ci.clone())?; }
+        
+        let mut res = try_parse_object(t, s, is_top, ci.clone())?;
+        if res.is_none() { res = try_parse_array(t, s, is_top, ci.clone())?; }
+        if !res.is_none() { return Ok(res); };
+        if is_top {
+            return Err("json object should be either a dictionary or an array".to_string());
+        }
+        let mut start = ci.clone();
+        let mut res = try_parse_string(ci.clone())?;
         if res.is_none() { res = try_parse_scalar(ci)?; }
-        if res.is_none() { Err("failed to parse value".to_string()) } else { Ok(res) }
+        if res.is_none() { return Err("failed to parse value".to_string()); } 
+        if t.is_empty() {
+            let mut res = res.unwrap();
+            let end_pos = get_pos(s, &mut res);
+            return Ok(Some((res, vec![(get_pos(s, &mut start), end_pos)]))); 
+        }
+        else { return Ok(Some((res.unwrap(), Intervals::new()))); }
     }
 
-    fn try_parse_kv(mut ci: Iter<'_>) -> Result<Option<Iter<'_>>, Err> {
+    fn try_parse_kv<'a, 'b>(t: &Trie<&'a str>, s: &'b str, mut ci: Iter<'b>) -> Result<Option<(Iter<'b>, Intervals)>, Err> {
         ci = skip_ignored(ci);
+        let mut start_key = ci.clone();
         let res = try_parse_string(ci)?;
         if res.is_none() { return Err("did not find key".to_string()); }
-        let ci = res.unwrap();
+        ci = res.unwrap();
+        let key = &s[get_pos(s, &mut start_key) + 1 .. get_pos(s, &mut ci) - 1];
         let res = try_parse_char(':', ci)?;
         if res.is_none() { return Err("did not find ':'".to_string())};
-        let ci = skip_ignored(res.unwrap());
-        try_parse_value(ci)
+        let mut start_value = skip_ignored(res.unwrap());
+        let tc = t.children.get(&key);
+        if tc.is_none() {
+            match try_parse_value(&Trie::<&'a str>::new(), s, false, start_value)? {
+                None => Ok(None),
+                Some((res, _)) => Ok(Some((res, Intervals::new())))
+            }
+        } else {
+            let (mut end_value, mut inner_intervals) = try_parse_value(tc.unwrap(), s, false, start_value.clone())?.unwrap();
+            if tc.unwrap().is_empty() { // key is the leaf node -> copy kv entirely
+                let end_pos = get_pos(s, &mut end_value);
+                return Ok(Some((end_value, vec![(get_pos(s, &mut start_key), end_pos)])));
+            } else { // key is an intermediate node -> copy only "key" + : + all eventual intervals returned by parse_value
+                let mut intervals = Intervals::new();
+                if !inner_intervals.is_empty() {
+                    intervals.push((get_pos(s, &mut start_key), get_pos(s, &mut start_value)));
+                    intervals.append(&mut inner_intervals);
+                }
+                return Ok(Some((end_value, intervals)));
+            }
+        }
     }
 
-
+    fn parse_json<'a, 'b>(t: &Trie<&'a str>, json: &'b str) -> Result<String, Err> {
+        let res = try_parse_value(t, json, true, json.char_indices().peekable());
+        match res {
+            Err(e) => Err(e),
+            Ok(o) => {
+                match o {
+                    None => Err("failed to parse".to_string()),
+                    Some((_ci, intervals)) => {
+                        let mut s = String::new();
+                        for i in intervals {
+                            s.push_str(&json[i.0..i.1]);
+                        }
+                        Ok(s)
+                    }
+                }
+            }
+        }
+    }
     #[test]
+    fn test_parse_json() {
+        let mut t = Trie::new();
+        // t.append_sequence(&["a"]);
+        // t.append_sequence(&["d", "f"]);
+        // t.append_sequence(&["c"]);
+        // t.append_sequence(&["e", "a"]);
+        // t.append_sequence(&["e", "b"]);
+        // t.append_sequence(&["a", "g"]);
+        let json = r#"{
+            "a" : {},
+            "b" : "abc",
+            "c" : [ true, false ],
+            "d" : {"e" : 1, "f" : "xxx"},
+            "e" : [
+                {
+                    "a" : 10,
+                    "b" : "xxx\""
+                },
+                {
+                    "a" : 11,
+                    "c" : "yyy"
+                }
+            ]
+        }"#;
+        let res = parse_json(&t, json);
+        assert!(res.is_ok());
+        assert_eq!(res.unwrap().as_str(), "abc");
+    }
+    /*#[test]
     fn test_parse_char() {
         let res = try_parse_char('a', "  ab".char_indices().peekable());
         assert!(res.is_ok());
@@ -508,7 +648,7 @@ pub mod json_look_up {
         let json = r#"[1, 2"#;
         let res: Result<Option<Peekable<CharIndices<'_>>>, String> = try_parse_array(json.char_indices().peekable());
         assert!(res.is_err());
-    }
+    } */
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
