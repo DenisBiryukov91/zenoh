@@ -20,7 +20,7 @@ use crate::{
     ZSlice,
 };
 use alloc::{sync::Arc, vec::Vec};
-use core::{cmp, iter, mem, num::NonZeroUsize, ops::RangeBounds, ptr};
+use core::{cmp::{self, max, min}, iter, mem, num::NonZeroUsize, ops::RangeBounds, ptr};
 use zenoh_collections::SingleOrVec;
 
 fn get_mut_unchecked<T>(arc: &mut Arc<T>) -> &mut T {
@@ -54,6 +54,50 @@ impl ZBuf {
         if !zslice.is_empty() {
             self.slices.push(zslice);
         }
+    }
+
+    /// Project zBuf, i.e. keep only data specified by ranges.
+    /// ranges is expected to be disjoint and monatonic,
+    /// i.e ranges[i].1 >= ranges[i].0 and ranges[i + 1].0 > ranges[i].1
+    pub fn project_unchecked(&self, ranges: &[(usize, usize)]) -> Self {
+        let mut projected_buf = Self::empty();
+        let mut current_slice_idx: usize = 0;
+        let mut current_idx_in_slice: usize = 0;
+        let mut current_idx_in_zbuf: usize = 0;
+        let mut last_projected_idx: usize = 0;
+
+        for r in ranges {
+            assert!(r.0 <= r.1);
+            assert!(last_projected_idx <= r.0);
+            assert!(r.1 <= self.len());
+            last_projected_idx = r.1;
+            // copy all slices that overlap with range and have their upper bound < r.1
+            while current_idx_in_zbuf + self.slices[current_slice_idx].len() < r.1 && current_slice_idx < self.slices.len() {
+                let current_slice = &self.slices[current_slice_idx];
+                if current_slice.len() + current_idx_in_zbuf >= r.0 {
+                    let start = max(r.0, current_idx_in_zbuf + current_idx_in_slice) - current_idx_in_zbuf;
+                    projected_buf.push_zslice(
+                        ZSlice::make(current_slice.buf.clone(), current_slice.start + start, current_slice.end).unwrap()
+                    );
+                }
+                current_idx_in_zbuf += current_slice.len();
+                current_idx_in_slice = 0;
+                current_slice_idx += 1;
+            }
+            if current_slice_idx == self.slices.len() || current_idx_in_zbuf >= r.1 {
+                continue;
+            }
+            // possibly copy overlapping part of the only slice with upper bound >= r.1
+            let current_slice = &self.slices[current_slice_idx];
+            let start = max(r.0, current_idx_in_zbuf) - current_idx_in_zbuf;
+            let end = min(r.1, current_idx_in_zbuf + current_slice.len()) - current_idx_in_zbuf;
+            projected_buf.push_zslice(
+                ZSlice::make(current_slice.buf.clone(), current_slice.start + start, current_slice.start + end).unwrap()
+            );
+            current_idx_in_slice = end;
+            
+        }
+        projected_buf
     }
 
     pub fn splice<Range: RangeBounds<usize>>(&mut self, erased: Range, replacement: &[u8]) {
@@ -635,6 +679,8 @@ impl ZBuf {
 }
 
 mod tests {
+    use crate::buffer::{Buffer, SplitBuffer};
+
     #[test]
     fn zbuf_eq() {
         use super::{ZBuf, ZSlice};
@@ -662,5 +708,32 @@ mod tests {
         zbuf2.push_zslice(slice.subslice(6, 8).unwrap());
 
         assert_eq!(zbuf1, zbuf2);
+    }
+
+    #[test]
+    fn zbuf_project_unchecked() {
+        use super::{ZBuf, ZSlice};
+        let mut zbuf1 = ZBuf::empty();
+        zbuf1.push_zslice(ZSlice::from([0u8, 1, 2, 3, 4, 5, 6, 7, 8].to_vec()));
+
+        let zbuf2 = zbuf1.project_unchecked(&[]);
+        assert_eq!(zbuf2.len(), 0);
+        let zbuf2 = zbuf1.project_unchecked(&[(0usize, 1usize)]);
+        assert_eq!(*zbuf2.contiguous(), [0u8]);
+        let zbuf2 = zbuf1.project_unchecked(&[(0usize, 4usize)]);
+        assert_eq!(*zbuf2.contiguous(), [0u8, 1, 2, 3]);
+        let zbuf2 = zbuf1.project_unchecked(&[(2usize, 5usize)]);
+        assert_eq!(*zbuf2.contiguous(), [2u8, 3, 4]);
+        let zbuf2 = zbuf1.project_unchecked(&[(0usize, 2usize), (4usize, 8usize)]);
+        assert_eq!(*zbuf2.contiguous(), [0u8, 1, 4, 5, 6, 7]);
+
+        zbuf1.push_zslice(ZSlice::from([9u8, 10, 11, 12, 13, 14, 15, 16].to_vec()));
+        
+        let zbuf2 = zbuf1.project_unchecked(&[(0, 17)]);
+        assert_eq!(*zbuf2.contiguous(), [0u8, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]);
+        let zbuf2 = zbuf1.project_unchecked(&[(6, 11)]);
+        assert_eq!(*zbuf2.contiguous(), [6u8, 7, 8, 9, 10]);
+        let zbuf2 = zbuf1.project_unchecked(&[(2, 3), (6, 11), (13, 16)]);
+        assert_eq!(*zbuf2.contiguous(), [2u8, 6, 7, 8, 9, 10, 13, 14, 15]);
     }
 }
