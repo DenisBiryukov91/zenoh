@@ -679,7 +679,6 @@ impl ZBuf {
 }
 
 mod tests {
-
     #[test]
     fn zbuf_eq() {
         use super::{ZBuf, ZSlice};

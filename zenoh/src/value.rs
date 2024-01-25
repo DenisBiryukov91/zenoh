@@ -30,9 +30,6 @@ use crate::prelude::{Encoding, KnownEncoding, Sample, SplitBuffer};
 #[cfg(feature = "shared-memory")]
 use zenoh_shm::SharedMemoryBuf;
 
-pub const PROJECTION_SLICE: &str = "slice";
-pub const PROJECTION_PICK: &str = "pick";
-
 /// A zenoh Value.
 #[non_exhaustive]
 #[derive(Clone)]

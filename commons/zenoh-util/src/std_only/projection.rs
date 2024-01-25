@@ -532,6 +532,10 @@ pub mod json_scan {
     }
 }
 
+
+pub const PROJECTION_RULE_NAME_SLICE: &str = "slice";
+pub const PROJECTION_RULE_NAME_PICK: &str = "pick";
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProjectionSlice {
     offset: usize,
@@ -629,12 +633,16 @@ impl FromStr for ProjectionRule {
                 let rule_name = &s[0..index];
                 let rule_args = &s[index..];
                 match rule_name {
-                    "pick" => { return Ok(ProjectionRule::ProjectionPick(rule_args.parse()?)); },
-                    "slice" => { return Ok(ProjectionRule::ProjectionSlice(rule_args.parse()?)); },
+                    PROJECTION_RULE_NAME_PICK => { 
+                        return Ok(ProjectionRule::ProjectionPick(rule_args.parse()?));
+                    },
+                    PROJECTION_RULE_NAME_SLICE => { 
+                        return Ok(ProjectionRule::ProjectionSlice(rule_args.parse()?));
+                    },
                      _ => bail!("Unsupported projection rule: {}", &rule_name)
                 }
             },
-            None => bail!("Failed to parse projection rule, it should be in the form: projection_rule_name(arg1, arg2, ...)")
+            None => bail!("Failed to parse projection rule, it should be in the form: 'projection_rule_name(arg1,arg2,...)'")
         }
     }
 }
