@@ -15,18 +15,15 @@
 //! Value primitives.
 
 use base64::{engine::general_purpose::STANDARD as b64_std_engine, Engine};
-use zenoh_buffers::buffer::Buffer;
+use zenoh_util::projection;
 use std::borrow::Cow;
-use std::cmp::min;
 use std::convert::TryFrom;
 use std::str;
-use unicode_segmentation::UnicodeSegmentation;
 #[cfg(feature = "shared-memory")]
 use std::sync::Arc;
 
 use zenoh_collections::Properties;
 use zenoh_result::{ZError, ZResult};
-use zenoh_util::projection::{ProjectionRule, FieldNamesTree};
 
 use crate::buffers::ZBuf;
 use crate::prelude::{Encoding, KnownEncoding, Sample, SplitBuffer};
@@ -68,92 +65,6 @@ impl Value {
     pub fn encoding(mut self, encoding: Encoding) -> Self {
         self.encoding = encoding;
         self
-    }
-
-    pub fn project(&self, projection_rule: &ProjectionRule) -> ZResult<Self> {
-        match projection_rule.op.as_str() {
-            PROJECTION_SLICE => self.project_slice(&projection_rule.args),
-            PROJECTION_PICK => self.project_pick(&projection_rule.args),
-            _ => bail!("Unsupported projection rule: '{}'", projection_rule.op.as_str())
-        }
-    }
-
-    fn project_slice(&self, args: &Vec<String>) -> ZResult<Self> {
-        if args.len() != 2 {
-            bail!(
-                "Projection rule '{}', must have 2 positive integer arguments: offset and length",
-                PROJECTION_SLICE
-            )
-        }
-        let offset = usize::from_str_radix(args[0].as_str(), 10)?;
-        let length = usize::from_str_radix(args[1].as_str(), 10)?;
-        match self.encoding {
-            Encoding::APP_OCTET_STREAM => {
-                let buf_len = self.payload.len();
-                let start = min(offset, buf_len);
-                let end = min(offset + length, buf_len);
-                Ok(Value::from(&self.payload.contiguous()[start..end]))
-            } 
-            Encoding::TEXT_PLAIN => {
-                if length == 0 {
-                   return Ok(Value::from(""))
-                }
-                match str::from_utf8(&self.payload.contiguous()) {
-                    Ok(s) => {
-                        let buf_len = s.len();
-                        let mut grapheme_indicies = s.grapheme_indices(true);
-                        let start = match grapheme_indicies.nth(offset) {
-                            Some(gi) => gi.0,
-                            None => buf_len
-                        };
-                        let end = match grapheme_indicies.nth(length - 1) {
-                            Some(gi) => gi.0,
-                            None => buf_len
-                        };
-                        Ok(Value::from(&s[start..end]))
-                    }
-                    Err(_) => bail!("Payload is not a valid utf-8 string")
-                }
-            }
-            _ => {
-                bail!(
-                    "Projection rule '{}' is not supported for encoding {}",
-                    PROJECTION_SLICE,
-                    self.encoding
-                )
-            }
-        }
-    }
-
-    fn project_pick(&self, args: &Vec<String>) -> ZResult<Self>  {
-        match self.encoding {
-            Encoding::APP_JSON | Encoding::TEXT_JSON => {
-                match serde_json::Value::try_from(self) {
-                    Ok(mut js) => {
-                        let mut t = FieldNamesTree::new(true);
-                        for arg in args {
-                            let mut field_name_parts = Vec::new();
-                            arg.split('.').for_each(|x| {
-                                field_name_parts.push(x.split('|').collect::<Vec<&str>>())
-                            });
-                            t.insert(field_name_parts.as_slice());
-                        }
-                        t.project_json(&mut js);
-                        let mut out = Value::from(js);
-                        out.encoding = self.encoding.clone();
-                        Ok(out)
-                    },
-                    Err(e) => bail!("Payload is not a valid json: {}", &e)
-                }
-            },
-            _ => {
-                bail!(
-                    "Projection rule '{}' is not supported for encoding {}",
-                    PROJECTION_PICK,
-                    self.encoding
-                )
-            }
-        }
     }
 }
 
@@ -795,5 +706,56 @@ impl TryFrom<Value> for Properties {
 
     fn try_from(v: Value) -> Result<Self, Self::Error> {
         Self::try_from(&v)
+    }
+}
+
+
+pub trait Projector {
+    fn project(&self, v: &Value) -> ZResult<Value>;
+}
+
+impl Projector for projection::ProjectionPick {
+    fn project(&self, v: &Value) -> ZResult<Value> {
+        let bytes = v.payload.contiguous();
+        match v.encoding.prefix() {
+            KnownEncoding::AppJson | KnownEncoding::TextJson => { 
+                match str::from_utf8(&bytes) {
+                    Ok(s) => Ok(
+                        Value {
+                            payload: v.payload.project_unchecked(&self.project_json(s)?), 
+                            encoding: v.encoding.clone()
+                        }
+                    ),
+                    Err(_) => bail!("Payload is not a valid utf-8 string")
+                }
+            },
+            _ => bail!("Projection rule 'Pick' is not supported for encoding '{}'", &v.encoding)
+        }
+    }
+}
+
+impl Projector for projection::ProjectionSlice {
+    fn project(&self, v: &Value) -> ZResult<Value> {
+        let bytes = v.payload.contiguous();
+        match v.encoding.prefix() {
+            KnownEncoding::AppOctetStream => Ok(
+                Value {
+                    payload: v.payload.project_unchecked(&self.project_bytes(&bytes)?), 
+                    encoding: v.encoding.clone()
+                }
+            ),
+            KnownEncoding::TextPlain => { 
+                match str::from_utf8(&bytes) {
+                    Ok(s) => Ok(
+                        Value {
+                            payload: v.payload.project_unchecked(&self.project_utf8_string(s)?), 
+                            encoding: v.encoding.clone()
+                        }
+                    ),
+                    Err(_) => bail!("Payload is not a valid utf-8 string")
+                }
+            }
+            _ => bail!("Projection rule 'Pick' is not supported for encoding '{}'", &v.encoding)
+        }
     }
 }

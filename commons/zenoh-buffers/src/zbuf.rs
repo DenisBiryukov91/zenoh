@@ -679,7 +679,6 @@ impl ZBuf {
 }
 
 mod tests {
-    use crate::buffer::{Buffer, SplitBuffer};
 
     #[test]
     fn zbuf_eq() {
@@ -712,6 +711,7 @@ mod tests {
 
     #[test]
     fn zbuf_project_unchecked() {
+        use crate::buffer::{Buffer, SplitBuffer};
         use super::{ZBuf, ZSlice};
         let mut zbuf1 = ZBuf::empty();
         zbuf1.push_zslice(ZSlice::from([0u8, 1, 2, 3, 4, 5, 6, 7, 8].to_vec()));

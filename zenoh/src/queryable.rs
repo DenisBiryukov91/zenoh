@@ -21,6 +21,7 @@ use crate::query::ReplyKeyExpr;
 #[zenoh_macros::unstable]
 use crate::sample::Attachment;
 use crate::sample::DataInfo;
+use crate::value::Projector;
 use crate::SessionRef;
 use crate::Undeclarable;
 
@@ -36,6 +37,7 @@ use zenoh_protocol::zenoh::reply::ext::ConsolidationType;
 use zenoh_protocol::zenoh::{self, ResponseBody};
 use zenoh_result::ZResult;
 use zenoh_transport::primitives::Primitives;
+use zenoh_util::projection::ProjectionRule;
 
 pub(crate) struct QueryInner {
     /// The key expression of this Query.
@@ -187,13 +189,10 @@ impl SyncResolve for ReplyBuilder<'_> {
                 {
                     bail!("Attempted to reply on `{}`, which does not intersect with query `{}`, despite query only allowing replies on matching key expressions", sample.key_expr, self.query.key_expr())
                 }
-                if let Ok(Some(projection_rule)) = self.query.selector().projection_rule() {
-                    match sample.value.project(&projection_rule) {
-                        Ok(projected_sample) => { sample.value = projected_sample; }
-                        Err(e) =>  { 
-                            bail!("Failed to apply projection rule: {}", e.to_string());
-                        }
-                    }
+                match self.query.selector().projection_rule()? {
+                    ProjectionRule::ProjectionPick(p) => { sample.value = p.project(&sample.value)?; },
+                    ProjectionRule::ProjectionSlice(p) => { sample.value = p.project(&sample.value)?;},
+                    ProjectionRule::None => {}
                 }
                 let Sample {
                     key_expr,

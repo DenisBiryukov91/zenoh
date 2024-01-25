@@ -408,16 +408,16 @@ pub trait Parameters<'a> {
         })
     }
 
-    /// Extracts the standardized `_proj` argument from the selector parameters.
+    /// Extracts the standardized `_project` argument from the selector parameters.
     ///
     /// The default implementation still causes a complete pass through the selector parameters to ensure that there are no duplicates of the `_project` key.
-    fn projection_rule(&'a self) -> ZResult<Option<ProjectionRule>>
+    fn projection_rule(&'a self) -> ZResult<ProjectionRule>
     where
         <Self::Decoder as Iterator>::Item: Parameter,
     {
         Ok(match &self.get_parameters([PROJECT_KEY])?[0] {
-            Some(s) => Some(s.as_ref().parse()?),
-            None => None,
+            Some(s) => s.as_ref().parse()?,
+            None => ProjectionRule::None,
         })
     }
 }
