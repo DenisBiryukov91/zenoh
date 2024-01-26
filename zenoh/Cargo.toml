@@ -104,6 +104,7 @@ zenoh-shm = { workspace = true, optional = true }
 zenoh-sync = { workspace = true }
 zenoh-transport = { workspace = true }
 zenoh-util = { workspace = true }
+arc-trace = { workspace = true }
 
 [build-dependencies]
 rustc_version = { workspace = true }

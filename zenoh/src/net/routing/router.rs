@@ -19,6 +19,7 @@ pub use super::resource::*;
 use super::runtime::Runtime;
 use crate::net::codec::Zenoh080Routing;
 use crate::net::protocol::linkstate::LinkStateList;
+use crate::runtime::WeakRuntime;
 use async_std::task::JoinHandle;
 use std::any::Any;
 use std::collections::hash_map::DefaultHasher;
@@ -303,7 +304,7 @@ impl Tables {
             .faces
             .entry(fid)
             .or_insert_with(|| {
-                FaceState::new(
+                FaceState::new( // LEAK
                     fid,
                     zid,
                     whatami,
@@ -516,7 +517,7 @@ impl Router {
     #[allow(clippy::too_many_arguments)]
     pub fn init_link_state(
         &mut self,
-        runtime: Runtime,
+        runtime: WeakRuntime,
         router_full_linkstate: bool,
         peer_full_linkstate: bool,
         router_peers_failover_brokering: bool,

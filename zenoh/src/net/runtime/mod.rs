@@ -27,6 +27,7 @@ use super::routing::router::{LinkStateInterceptor, Router};
 use crate::config::{unwrap_or_default, Config, ModeDependent, Notifier};
 use crate::GIT_VERSION;
 pub use adminspace::AdminSpace;
+use arc_trace::{ArcTrace, WeakTrace};
 use async_std::task::JoinHandle;
 use futures::stream::StreamExt;
 use futures::Future;
@@ -61,8 +62,19 @@ pub struct RuntimeState {
 }
 
 #[derive(Clone)]
+pub struct WeakRuntime {
+    state: WeakTrace<RuntimeState>,
+}
+
+impl WeakRuntime {
+    pub fn upgrade(&self) -> Option<Runtime> {
+        self.state.upgrade().map(|state| Runtime { state })
+    }
+}
+
+#[derive(Clone)]
 pub struct Runtime {
-    state: Arc<RuntimeState>,
+    state: ArcTrace<RuntimeState>,
 }
 
 impl std::ops::Deref for Runtime {
@@ -135,7 +147,7 @@ impl Runtime {
         let config = Notifier::new(config);
 
         let runtime = Runtime {
-            state: Arc::new(RuntimeState {
+            state: ArcTrace::new(RuntimeState {
                 zid,
                 whatami,
                 metadata,
@@ -148,9 +160,9 @@ impl Runtime {
                 stop_source: std::sync::RwLock::new(Some(StopSource::new())),
             }),
         };
-        *handler.runtime.write().unwrap() = Some(runtime.clone());
+        *handler.runtime.write().unwrap() = Some(runtime.downgrade());
         get_mut_unchecked(&mut runtime.router.clone()).init_link_state(
-            runtime.clone(),
+            runtime.downgrade(),
             router_link_state,
             peer_link_state,
             router_peers_failover_brokering,
@@ -190,6 +202,10 @@ impl Runtime {
         log::trace!("Runtime::close())");
         drop(self.stop_source.write().unwrap().take());
         self.manager().close().await;
+        //self.router.tables.tables.write().unwrap().peers_net.take();
+        //self.router.tables.tables.write().unwrap().routers_net.take();
+        self.transport_handlers.write().unwrap().clear();
+        // log::trace!("Runtime::closed())");
         Ok(())
     }
 
@@ -212,10 +228,16 @@ impl Runtime {
             .as_ref()
             .map(|source| async_std::task::spawn(future.timeout_at(source.token())))
     }
+
+    pub fn downgrade(&self) -> WeakRuntime {
+        WeakRuntime {
+            state: ArcTrace::downgrade(&self.state)
+        }
+    }
 }
 
 struct RuntimeTransportEventHandler {
-    runtime: std::sync::RwLock<Option<Runtime>>,
+    runtime: std::sync::RwLock<Option<WeakRuntime>>,
 }
 
 impl TransportEventHandler for RuntimeTransportEventHandler {
@@ -227,7 +249,7 @@ impl TransportEventHandler for RuntimeTransportEventHandler {
         match zread!(self.runtime).as_ref() {
             Some(runtime) => {
                 let slave_handlers: Vec<Arc<dyn TransportPeerEventHandler>> =
-                    zread!(runtime.transport_handlers)
+                    zread!(runtime.upgrade().unwrap().transport_handlers)
                         .iter()
                         .filter_map(|handler| {
                             handler.new_unicast(peer.clone(), transport.clone()).ok()
@@ -236,7 +258,7 @@ impl TransportEventHandler for RuntimeTransportEventHandler {
                 Ok(Arc::new(RuntimeSession {
                     runtime: runtime.clone(),
                     endpoint: std::sync::RwLock::new(None),
-                    main_handler: runtime.router.new_transport_unicast(transport).unwrap(),
+                    main_handler: runtime.upgrade().unwrap().router.new_transport_unicast(transport).unwrap(),
                     slave_handlers,
                 }))
             }
@@ -251,11 +273,11 @@ impl TransportEventHandler for RuntimeTransportEventHandler {
         match zread!(self.runtime).as_ref() {
             Some(runtime) => {
                 let slave_handlers: Vec<Arc<dyn TransportMulticastEventHandler>> =
-                    zread!(runtime.transport_handlers)
+                    zread!(runtime.upgrade().unwrap().transport_handlers)
                         .iter()
                         .filter_map(|handler| handler.new_multicast(transport.clone()).ok())
                         .collect();
-                runtime.router.new_transport_multicast(transport.clone())?;
+                runtime.upgrade().unwrap().router.new_transport_multicast(transport.clone())?;
                 Ok(Arc::new(RuntimeMuticastGroup {
                     runtime: runtime.clone(),
                     transport,
@@ -268,7 +290,7 @@ impl TransportEventHandler for RuntimeTransportEventHandler {
 }
 
 pub(super) struct RuntimeSession {
-    pub(super) runtime: Runtime,
+    pub(super) runtime: WeakRuntime,
     pub(super) endpoint: std::sync::RwLock<Option<EndPoint>>,
     pub(super) main_handler: Arc<LinkStateInterceptor>,
     pub(super) slave_handlers: Vec<Arc<dyn TransportPeerEventHandler>>,
@@ -329,7 +351,7 @@ impl TransportPeerEventHandler for RuntimeSession {
 }
 
 pub(super) struct RuntimeMuticastGroup {
-    pub(super) runtime: Runtime,
+    pub(super) runtime: WeakRuntime,
     pub(super) transport: TransportMulticast,
     pub(super) slave_handlers: Vec<Arc<dyn TransportMulticastEventHandler>>,
 }
@@ -343,7 +365,7 @@ impl TransportMulticastEventHandler for RuntimeMuticastGroup {
             .collect();
         Ok(Arc::new(RuntimeMuticastSession {
             main_handler: self
-                .runtime
+                .runtime.upgrade().unwrap()
                 .router
                 .new_peer_multicast(self.transport.clone(), peer)?,
             slave_handlers,

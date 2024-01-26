@@ -217,6 +217,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a4668cab20f66d8d020e1fbc0ebe47217433c1b6c8f2040faf858554e394ace6"
 
 [[package]]
+name = "arc-trace"
+version = "0.1.0"
+dependencies = [
+ "log",
+]
+
+[[package]]
 name = "array-init"
 version = "2.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4563,6 +4570,7 @@ dependencies = [
 name = "zenoh"
 version = "0.11.0-dev"
 dependencies = [
+ "arc-trace",
  "async-global-executor",
  "async-std",
  "async-trait",
@@ -4678,6 +4686,7 @@ dependencies = [
 name = "zenoh-examples"
 version = "0.11.0-dev"
 dependencies = [
+ "arc-trace",
  "async-std",
  "clap",
  "env_logger",

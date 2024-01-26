@@ -187,6 +187,7 @@ zenoh-link-serial = { version = "0.11.0-dev", path = "io/zenoh-links/zenoh-link-
 zenoh-link = { version = "0.11.0-dev", path = "io/zenoh-link" }
 zenoh-link-commons = { version = "0.11.0-dev", path = "io/zenoh-link-commons" }
 zenoh = { version = "0.11.0-dev", path = "zenoh", default-features = false }
+arc-trace = { path = "../arc-trace" }
 
 [profile.dev]
 debug = true

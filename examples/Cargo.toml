@@ -51,6 +51,7 @@ json5 = { workspace = true }
 log = { workspace = true }
 zenoh = { workspace = true }
 zenoh-ext = { workspace = true }
+arc-trace = { workspace = true }
 
 [dev-dependencies]
 rand = { workspace = true, features = ["default"] }

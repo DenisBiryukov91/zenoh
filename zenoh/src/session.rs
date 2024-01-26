@@ -456,7 +456,10 @@ impl Session {
 
             let primitives = zwrite!(self.state).primitives.as_ref().unwrap().clone();
             primitives.send_close();
-
+            let mut state = self.state.write().unwrap();
+            state.queryables.clear();
+            state.primitives.take();
+            
             Ok(())
         })
     }

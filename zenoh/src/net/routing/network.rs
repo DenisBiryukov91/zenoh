@@ -14,6 +14,7 @@
 use crate::net::codec::Zenoh080Routing;
 use crate::net::protocol::linkstate::{LinkState, LinkStateList};
 use crate::net::runtime::Runtime;
+use crate::runtime::WeakRuntime;
 use async_std::task;
 use petgraph::graph::NodeIndex;
 use petgraph::visit::{IntoNodeReferences, VisitMap, Visitable};
@@ -115,7 +116,7 @@ pub(crate) struct Network {
     pub(crate) trees: Vec<Tree>,
     pub(crate) distances: Vec<f64>,
     pub(crate) graph: petgraph::stable_graph::StableUnGraph<Node, f64>,
-    pub(crate) runtime: Runtime,
+    pub(crate) runtime: WeakRuntime,
 }
 
 impl Network {
@@ -123,7 +124,7 @@ impl Network {
     pub(crate) fn new(
         name: String,
         zid: ZenohId,
-        runtime: Runtime,
+        runtime: WeakRuntime,
         full_linkstate: bool,
         router_peers_failover_brokering: bool,
         gossip: bool,
@@ -134,7 +135,7 @@ impl Network {
         log::debug!("{} Add node (self) {}", name, zid);
         let idx = graph.add_node(Node {
             zid,
-            whatami: Some(runtime.whatami),
+            whatami: Some(runtime.upgrade().unwrap().whatami),
             locators: None,
             sn: 1,
             links: vec![],
@@ -253,7 +254,7 @@ impl Network {
             whatami: self.graph[idx].whatami,
             locators: if details.locators {
                 if idx == self.idx {
-                    Some(self.runtime.get_locators())
+                    Some(self.runtime.upgrade().unwrap().get_locators())
                 } else {
                     self.graph[idx].locators.clone()
                 }
@@ -493,19 +494,19 @@ impl Network {
 
                         if !self.autoconnect.is_empty() {
                             // Connect discovered peers
-                            if task::block_on(self.runtime.manager().get_transport_unicast(&zid))
+                            if task::block_on(self.runtime.upgrade().unwrap().manager().get_transport_unicast(&zid))
                                 .is_none()
                                 && self.autoconnect.matches(whatami)
                             {
                                 if let Some(locators) = locators {
                                     let runtime = self.runtime.clone();
-                                    self.runtime.spawn(async move {
+                                    self.runtime.upgrade().unwrap().spawn(async move {
                                         // random backoff
                                         async_std::task::sleep(std::time::Duration::from_millis(
                                             rand::random::<u64>() % 100,
                                         ))
                                         .await;
-                                        runtime.connect_peer(&zid, &locators).await;
+                                        runtime.upgrade().unwrap().connect_peer(&zid, &locators).await;
                                     });
                                 }
                             }
@@ -612,7 +613,7 @@ impl Network {
             for (_, idx, _) in &link_states {
                 let node = &self.graph[*idx];
                 if let Some(whatami) = node.whatami {
-                    if task::block_on(self.runtime.manager().get_transport_unicast(&node.zid))
+                    if task::block_on(self.runtime.upgrade().unwrap().manager().get_transport_unicast(&node.zid))
                         .is_none()
                         && self.autoconnect.matches(whatami)
                     {
@@ -620,13 +621,13 @@ impl Network {
                             let runtime = self.runtime.clone();
                             let zid = node.zid;
                             let locators = locators.clone();
-                            self.runtime.spawn(async move {
+                            self.runtime.upgrade().unwrap().spawn(async move {
                                 // random backoff
                                 async_std::task::sleep(std::time::Duration::from_millis(
                                     rand::random::<u64>() % 100,
                                 ))
                                 .await;
-                                runtime.connect_peer(&zid, &locators).await;
+                                runtime.upgrade().unwrap().connect_peer(&zid, &locators).await;
                             });
                         }
                     }
