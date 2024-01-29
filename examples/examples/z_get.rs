@@ -1,3 +1,4 @@
+use async_std::task;
 //
 // Copyright (c) 2023 ZettaScale Technology
 //
@@ -22,12 +23,11 @@ use zenoh_examples::CommonArgs;
 async fn main() {
     // initiate logging
     env_logger::init();
-
+{
     let (config, selector, value, target, timeout) = parse_args();
 
     println!("Opening session...");
     let session = zenoh::open(config).res().await.unwrap();
-
     println!("Sending Query '{selector}'...");
     let replies = match value {
         Some(value) => session.get(&selector).with_value(value),
@@ -48,6 +48,9 @@ async fn main() {
             Err(err) => println!(">> Received (ERROR: '{}')", String::try_from(&err).unwrap()),
         }
     }
+}
+    arc_trace::print_traces();
+    task::sleep(Duration::from_millis(1000)).await;
 }
 
 #[derive(clap::ValueEnum, Clone, Copy, Debug)]

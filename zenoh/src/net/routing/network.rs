@@ -13,7 +13,6 @@
 //
 use crate::net::codec::Zenoh080Routing;
 use crate::net::protocol::linkstate::{LinkState, LinkStateList};
-use crate::net::runtime::Runtime;
 use crate::runtime::WeakRuntime;
 use async_std::task;
 use petgraph::graph::NodeIndex;
@@ -135,7 +134,7 @@ impl Network {
         log::debug!("{} Add node (self) {}", name, zid);
         let idx = graph.add_node(Node {
             zid,
-            whatami: Some(runtime.upgrade().unwrap().whatami),
+            whatami: Some(runtime.upgrade().whatami),
             locators: None,
             sn: 1,
             links: vec![],
@@ -254,7 +253,7 @@ impl Network {
             whatami: self.graph[idx].whatami,
             locators: if details.locators {
                 if idx == self.idx {
-                    Some(self.runtime.upgrade().unwrap().get_locators())
+                    Some(self.runtime.upgrade().get_locators())
                 } else {
                     self.graph[idx].locators.clone()
                 }
@@ -494,19 +493,19 @@ impl Network {
 
                         if !self.autoconnect.is_empty() {
                             // Connect discovered peers
-                            if task::block_on(self.runtime.upgrade().unwrap().manager().get_transport_unicast(&zid))
+                            if task::block_on(self.runtime.upgrade().manager().get_transport_unicast(&zid))
                                 .is_none()
                                 && self.autoconnect.matches(whatami)
                             {
                                 if let Some(locators) = locators {
                                     let runtime = self.runtime.clone();
-                                    self.runtime.upgrade().unwrap().spawn(async move {
+                                    self.runtime.upgrade().spawn(async move {
                                         // random backoff
                                         async_std::task::sleep(std::time::Duration::from_millis(
                                             rand::random::<u64>() % 100,
                                         ))
                                         .await;
-                                        runtime.upgrade().unwrap().connect_peer(&zid, &locators).await;
+                                        runtime.upgrade().connect_peer(&zid, &locators).await;
                                     });
                                 }
                             }
@@ -613,7 +612,7 @@ impl Network {
             for (_, idx, _) in &link_states {
                 let node = &self.graph[*idx];
                 if let Some(whatami) = node.whatami {
-                    if task::block_on(self.runtime.upgrade().unwrap().manager().get_transport_unicast(&node.zid))
+                    if task::block_on(self.runtime.upgrade().manager().get_transport_unicast(&node.zid))
                         .is_none()
                         && self.autoconnect.matches(whatami)
                     {
@@ -621,13 +620,13 @@ impl Network {
                             let runtime = self.runtime.clone();
                             let zid = node.zid;
                             let locators = locators.clone();
-                            self.runtime.upgrade().unwrap().spawn(async move {
+                            self.runtime.upgrade().spawn(async move {
                                 // random backoff
                                 async_std::task::sleep(std::time::Duration::from_millis(
                                     rand::random::<u64>() % 100,
                                 ))
                                 .await;
-                                runtime.upgrade().unwrap().connect_peer(&zid, &locators).await;
+                                runtime.upgrade().connect_peer(&zid, &locators).await;
                             });
                         }
                     }

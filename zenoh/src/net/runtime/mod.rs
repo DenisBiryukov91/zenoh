@@ -67,8 +67,14 @@ pub struct WeakRuntime {
 }
 
 impl WeakRuntime {
-    pub fn upgrade(&self) -> Option<Runtime> {
-        self.state.upgrade().map(|state| Runtime { state })
+    pub fn upgrade(&self) -> Runtime {
+        match self.state.upgrade() {
+            Some(state) => Runtime {state},
+            None => {
+                log::error!("Failed to upgrade weak runtime to strong one");
+                panic!("Failed to upgrade weak runtime to strong one");
+            }
+        }
     }
 }
 
@@ -202,10 +208,7 @@ impl Runtime {
         log::trace!("Runtime::close())");
         drop(self.stop_source.write().unwrap().take());
         self.manager().close().await;
-        //self.router.tables.tables.write().unwrap().peers_net.take();
-        //self.router.tables.tables.write().unwrap().routers_net.take();
         self.transport_handlers.write().unwrap().clear();
-        // log::trace!("Runtime::closed())");
         Ok(())
     }
 
@@ -249,7 +252,7 @@ impl TransportEventHandler for RuntimeTransportEventHandler {
         match zread!(self.runtime).as_ref() {
             Some(runtime) => {
                 let slave_handlers: Vec<Arc<dyn TransportPeerEventHandler>> =
-                    zread!(runtime.upgrade().unwrap().transport_handlers)
+                    zread!(runtime.upgrade().transport_handlers)
                         .iter()
                         .filter_map(|handler| {
                             handler.new_unicast(peer.clone(), transport.clone()).ok()
@@ -258,7 +261,7 @@ impl TransportEventHandler for RuntimeTransportEventHandler {
                 Ok(Arc::new(RuntimeSession {
                     runtime: runtime.clone(),
                     endpoint: std::sync::RwLock::new(None),
-                    main_handler: runtime.upgrade().unwrap().router.new_transport_unicast(transport).unwrap(),
+                    main_handler: runtime.upgrade().router.new_transport_unicast(transport).unwrap(),
                     slave_handlers,
                 }))
             }
@@ -273,11 +276,11 @@ impl TransportEventHandler for RuntimeTransportEventHandler {
         match zread!(self.runtime).as_ref() {
             Some(runtime) => {
                 let slave_handlers: Vec<Arc<dyn TransportMulticastEventHandler>> =
-                    zread!(runtime.upgrade().unwrap().transport_handlers)
+                    zread!(runtime.upgrade().transport_handlers)
                         .iter()
                         .filter_map(|handler| handler.new_multicast(transport.clone()).ok())
                         .collect();
-                runtime.upgrade().unwrap().router.new_transport_multicast(transport.clone())?;
+                runtime.upgrade().router.new_transport_multicast(transport.clone())?;
                 Ok(Arc::new(RuntimeMuticastGroup {
                     runtime: runtime.clone(),
                     transport,
@@ -300,7 +303,7 @@ impl TransportPeerEventHandler for RuntimeSession {
     fn handle_message(&self, msg: NetworkMessage) -> ZResult<()> {
         // critical path shortcut
         if let NetworkBody::Push(data) = msg.body {
-            let face = &self.main_handler.face.state;
+            let face = &self.main_handler.face.state();
 
             full_reentrant_route_data(
                 &self.main_handler.tables.tables,
@@ -365,7 +368,7 @@ impl TransportMulticastEventHandler for RuntimeMuticastGroup {
             .collect();
         Ok(Arc::new(RuntimeMuticastSession {
             main_handler: self
-                .runtime.upgrade().unwrap()
+                .runtime.upgrade()
                 .router
                 .new_peer_multicast(self.transport.clone(), peer)?,
             slave_handlers,

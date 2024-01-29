@@ -57,8 +57,8 @@ pub(crate) fn init(session: &Session) {
             true,
             Locality::SessionLocal,
             Arc::new({
-                let session = session.clone();
-                move |q| super::admin::on_admin_query(&session, q)
+                let session = session.downgrade();
+                move |q| super::admin::on_admin_query(&session.upgrade(), q)
             }),
         );
     }

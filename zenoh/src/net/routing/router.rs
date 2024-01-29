@@ -16,7 +16,6 @@ use super::network::{shared_nodes, Network};
 pub use super::pubsub::*;
 pub use super::queries::*;
 pub use super::resource::*;
-use super::runtime::Runtime;
 use crate::net::codec::Zenoh080Routing;
 use crate::net::protocol::linkstate::LinkStateList;
 use crate::runtime::WeakRuntime;
@@ -304,7 +303,7 @@ impl Tables {
             .faces
             .entry(fid)
             .or_insert_with(|| {
-                FaceState::new( // LEAK
+                FaceState::new(
                     fid,
                     zid,
                     whatami,
@@ -565,10 +564,7 @@ impl Router {
                 let ctrl_lock = zlock!(self.tables.ctrl_lock);
                 let mut tables = zwrite!(self.tables.tables);
                 let zid = tables.zid;
-                let face = tables
-                    .open_face(zid, WhatAmI::Client, primitives)
-                    .upgrade()
-                    .unwrap();
+                let face = tables.open_face(zid, WhatAmI::Client, primitives);
                 drop(tables);
                 drop(ctrl_lock);
                 face
@@ -623,8 +619,6 @@ impl Router {
                         Arc::new(Mux::new(transport)),
                         link_id,
                     )
-                    .upgrade()
-                    .unwrap(),
             },
         ));
 
@@ -694,7 +688,7 @@ impl Router {
         compute_data_routes_from(&mut tables, &mut root_res);
         Ok(Arc::new(DeMux::new(Face {
             tables: self.tables.clone(),
-            state: face_state,
+            state: Arc::downgrade(&face_state),
         })))
     }
 }

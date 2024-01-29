@@ -14,7 +14,7 @@
 use super::router::*;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 use zenoh_protocol::zenoh::RequestBody;
 use zenoh_protocol::{
     core::{ExprId, WhatAmI, ZenohId},
@@ -160,7 +160,13 @@ impl fmt::Display for FaceState {
 #[derive(Clone)]
 pub struct Face {
     pub(crate) tables: Arc<TablesLock>,
-    pub(crate) state: Arc<FaceState>,
+    pub(crate) state: Weak<FaceState>,
+}
+
+impl Face {
+    pub(crate) fn state(&self) -> Arc<FaceState> {
+        self.state.upgrade().unwrap()
+    }
 }
 
 impl Primitives for Face {
@@ -168,23 +174,23 @@ impl Primitives for Face {
         let ctrl_lock = zlock!(self.tables.ctrl_lock);
         match msg.body {
             zenoh_protocol::network::DeclareBody::DeclareKeyExpr(m) => {
-                register_expr(&self.tables, &mut self.state.clone(), m.id, &m.wire_expr);
+                register_expr(&self.tables, &mut self.state(), m.id, &m.wire_expr);
             }
             zenoh_protocol::network::DeclareBody::UndeclareKeyExpr(m) => {
-                unregister_expr(&self.tables, &mut self.state.clone(), m.id);
+                unregister_expr(&self.tables, &mut self.state(), m.id);
             }
             zenoh_protocol::network::DeclareBody::DeclareSubscriber(m) => {
                 let rtables = zread!(self.tables.tables);
-                match (rtables.whatami, self.state.whatami) {
+                match (rtables.whatami, self.state().whatami) {
                     (WhatAmI::Router, WhatAmI::Router) => {
                         if let Some(router) = self
-                            .state
+                            .state()
                             .get_router(&rtables, &(msg.ext_nodeid.node_id as u64))
                         {
                             declare_router_subscription(
                                 &self.tables,
                                 rtables,
-                                &mut self.state.clone(),
+                                &mut self.state(),
                                 &m.wire_expr,
                                 &m.ext_info,
                                 router,
@@ -196,13 +202,13 @@ impl Primitives for Face {
                     | (WhatAmI::Peer, WhatAmI::Peer) => {
                         if rtables.full_net(WhatAmI::Peer) {
                             if let Some(peer) = self
-                                .state
+                                .state()
                                 .get_peer(&rtables, &(msg.ext_nodeid.node_id as u64))
                             {
                                 declare_peer_subscription(
                                     &self.tables,
                                     rtables,
-                                    &mut self.state.clone(),
+                                    &mut self.state(),
                                     &m.wire_expr,
                                     &m.ext_info,
                                     peer,
@@ -212,7 +218,7 @@ impl Primitives for Face {
                             declare_client_subscription(
                                 &self.tables,
                                 rtables,
-                                &mut self.state.clone(),
+                                &mut self.state(),
                                 &m.wire_expr,
                                 &m.ext_info,
                             )
@@ -221,7 +227,7 @@ impl Primitives for Face {
                     _ => declare_client_subscription(
                         &self.tables,
                         rtables,
-                        &mut self.state.clone(),
+                        &mut self.state(),
                         &m.wire_expr,
                         &m.ext_info,
                     ),
@@ -229,16 +235,16 @@ impl Primitives for Face {
             }
             zenoh_protocol::network::DeclareBody::UndeclareSubscriber(m) => {
                 let rtables = zread!(self.tables.tables);
-                match (rtables.whatami, self.state.whatami) {
+                match (rtables.whatami, self.state().whatami) {
                     (WhatAmI::Router, WhatAmI::Router) => {
                         if let Some(router) = self
-                            .state
+                            .state()
                             .get_router(&rtables, &(msg.ext_nodeid.node_id as u64))
                         {
                             forget_router_subscription(
                                 &self.tables,
                                 rtables,
-                                &mut self.state.clone(),
+                                &mut self.state(),
                                 &m.ext_wire_expr.wire_expr,
                                 &router,
                             )
@@ -249,13 +255,13 @@ impl Primitives for Face {
                     | (WhatAmI::Peer, WhatAmI::Peer) => {
                         if rtables.full_net(WhatAmI::Peer) {
                             if let Some(peer) = self
-                                .state
+                                .state()
                                 .get_peer(&rtables, &(msg.ext_nodeid.node_id as u64))
                             {
                                 forget_peer_subscription(
                                     &self.tables,
                                     rtables,
-                                    &mut self.state.clone(),
+                                    &mut self.state(),
                                     &m.ext_wire_expr.wire_expr,
                                     &peer,
                                 )
@@ -264,7 +270,7 @@ impl Primitives for Face {
                             forget_client_subscription(
                                 &self.tables,
                                 rtables,
-                                &mut self.state.clone(),
+                                &mut self.state(),
                                 &m.ext_wire_expr.wire_expr,
                             )
                         }
@@ -272,23 +278,23 @@ impl Primitives for Face {
                     _ => forget_client_subscription(
                         &self.tables,
                         rtables,
-                        &mut self.state.clone(),
+                        &mut self.state(),
                         &m.ext_wire_expr.wire_expr,
                     ),
                 }
             }
             zenoh_protocol::network::DeclareBody::DeclareQueryable(m) => {
                 let rtables = zread!(self.tables.tables);
-                match (rtables.whatami, self.state.whatami) {
+                match (rtables.whatami, self.state().whatami) {
                     (WhatAmI::Router, WhatAmI::Router) => {
                         if let Some(router) = self
-                            .state
+                            .state()
                             .get_router(&rtables, &(msg.ext_nodeid.node_id as u64))
                         {
                             declare_router_queryable(
                                 &self.tables,
                                 rtables,
-                                &mut self.state.clone(),
+                                &mut self.state(),
                                 &m.wire_expr,
                                 &m.ext_info,
                                 router,
@@ -300,13 +306,13 @@ impl Primitives for Face {
                     | (WhatAmI::Peer, WhatAmI::Peer) => {
                         if rtables.full_net(WhatAmI::Peer) {
                             if let Some(peer) = self
-                                .state
+                                .state()
                                 .get_peer(&rtables, &(msg.ext_nodeid.node_id as u64))
                             {
                                 declare_peer_queryable(
                                     &self.tables,
                                     rtables,
-                                    &mut self.state.clone(),
+                                    &mut self.state(),
                                     &m.wire_expr,
                                     &m.ext_info,
                                     peer,
@@ -316,7 +322,7 @@ impl Primitives for Face {
                             declare_client_queryable(
                                 &self.tables,
                                 rtables,
-                                &mut self.state.clone(),
+                                &mut self.state(),
                                 &m.wire_expr,
                                 &m.ext_info,
                             )
@@ -325,7 +331,7 @@ impl Primitives for Face {
                     _ => declare_client_queryable(
                         &self.tables,
                         rtables,
-                        &mut self.state.clone(),
+                        &mut self.state(),
                         &m.wire_expr,
                         &m.ext_info,
                     ),
@@ -333,16 +339,16 @@ impl Primitives for Face {
             }
             zenoh_protocol::network::DeclareBody::UndeclareQueryable(m) => {
                 let rtables = zread!(self.tables.tables);
-                match (rtables.whatami, self.state.whatami) {
+                match (rtables.whatami, self.state().whatami) {
                     (WhatAmI::Router, WhatAmI::Router) => {
                         if let Some(router) = self
-                            .state
+                            .state()
                             .get_router(&rtables, &(msg.ext_nodeid.node_id as u64))
                         {
                             forget_router_queryable(
                                 &self.tables,
                                 rtables,
-                                &mut self.state.clone(),
+                                &mut self.state(),
                                 &m.ext_wire_expr.wire_expr,
                                 &router,
                             )
@@ -353,13 +359,13 @@ impl Primitives for Face {
                     | (WhatAmI::Peer, WhatAmI::Peer) => {
                         if rtables.full_net(WhatAmI::Peer) {
                             if let Some(peer) = self
-                                .state
+                                .state()
                                 .get_peer(&rtables, &(msg.ext_nodeid.node_id as u64))
                             {
                                 forget_peer_queryable(
                                     &self.tables,
                                     rtables,
-                                    &mut self.state.clone(),
+                                    &mut self.state(),
                                     &m.ext_wire_expr.wire_expr,
                                     &peer,
                                 )
@@ -368,7 +374,7 @@ impl Primitives for Face {
                             forget_client_queryable(
                                 &self.tables,
                                 rtables,
-                                &mut self.state.clone(),
+                                &mut self.state(),
                                 &m.ext_wire_expr.wire_expr,
                             )
                         }
@@ -376,7 +382,7 @@ impl Primitives for Face {
                     _ => forget_client_queryable(
                         &self.tables,
                         rtables,
-                        &mut self.state.clone(),
+                        &mut self.state(),
                         &m.ext_wire_expr.wire_expr,
                     ),
                 }
@@ -393,7 +399,7 @@ impl Primitives for Face {
     fn send_push(&self, msg: Push) {
         full_reentrant_route_data(
             &self.tables.tables,
-            &self.state,
+            &self.state(),
             &msg.wire_expr,
             msg.ext_qos,
             msg.payload,
@@ -406,7 +412,7 @@ impl Primitives for Face {
             RequestBody::Query(_) => {
                 route_query(
                     &self.tables,
-                    &self.state,
+                    &self.state(),
                     &msg.wire_expr,
                     // parameters,
                     msg.id,
@@ -417,7 +423,7 @@ impl Primitives for Face {
                 );
             }
             RequestBody::Pull(_) => {
-                pull_data(&self.tables.tables, &self.state.clone(), msg.wire_expr);
+                pull_data(&self.tables.tables, &self.state(), msg.wire_expr);
             }
             _ => {
                 log::error!("Unsupported request");
@@ -428,7 +434,7 @@ impl Primitives for Face {
     fn send_response(&self, msg: Response) {
         route_send_response(
             &self.tables,
-            &mut self.state.clone(),
+            &mut self.state(),
             msg.rid,
             msg.ext_respid,
             msg.wire_expr,
@@ -437,16 +443,16 @@ impl Primitives for Face {
     }
 
     fn send_response_final(&self, msg: ResponseFinal) {
-        route_send_response_final(&self.tables, &mut self.state.clone(), msg.rid);
+        route_send_response_final(&self.tables, &mut self.state(), msg.rid);
     }
 
     fn send_close(&self) {
-        super::router::close_face(&self.tables, &Arc::downgrade(&self.state));
+        super::router::close_face(&self.tables, &self.state);
     }
 }
 
 impl fmt::Display for Face {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        self.state.fmt(f)
+        self.state().fmt(f)
     }
 }

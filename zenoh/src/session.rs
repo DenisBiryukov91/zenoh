@@ -28,6 +28,7 @@ use crate::prelude::{KeyExpr, Parameters};
 use crate::publication::*;
 use crate::query::*;
 use crate::queryable::*;
+use crate::runtime::WeakRuntime;
 #[cfg(feature = "unstable")]
 use crate::sample::Attachment;
 use crate::sample::DataInfo;
@@ -39,6 +40,8 @@ use crate::Sample;
 use crate::SampleKind;
 use crate::Selector;
 use crate::Value;
+use arc_trace::ArcTrace;
+use arc_trace::WeakTrace;
 use async_std::task;
 use log::{error, trace, warn};
 use std::collections::HashMap;
@@ -322,17 +325,42 @@ where
     }
 }
 
+pub struct WeakSession {
+    runtime: WeakRuntime,
+    state: WeakTrace<RwLock<SessionState>>,
+    id: u16
+}
+
+impl WeakSession {
+    pub(crate) fn upgrade(&self) -> Session {
+        Session {
+            runtime: self.runtime.upgrade(),
+            state: self.state.upgrade().unwrap(),
+            id: self.id,
+            alive: false
+        }
+    }
+}
 /// A zenoh session.
 ///
 pub struct Session {
     pub(crate) runtime: Runtime,
-    pub(crate) state: Arc<RwLock<SessionState>>,
+    pub(crate) state: ArcTrace<RwLock<SessionState>>,
     pub(crate) id: u16,
     pub(crate) alive: bool,
 }
 
 static SESSION_ID_COUNTER: AtomicU16 = AtomicU16::new(0);
 impl Session {
+
+    pub(crate) fn downgrade(&self) -> WeakSession {
+        WeakSession {
+            runtime: self.runtime.downgrade(),
+            state: ArcTrace::downgrade(&self.state),
+            id: self.id
+        }
+    }
+
     pub(crate) fn init(
         runtime: Runtime,
         aggregated_subscribers: Vec<OwnedKeyExpr>,
@@ -340,7 +368,7 @@ impl Session {
     ) -> impl Resolve<Session> {
         ResolveClosure::new(move || {
             let router = runtime.router.clone();
-            let state = Arc::new(RwLock::new(SessionState::new(
+            let state = ArcTrace::new(RwLock::new(SessionState::new(
                 aggregated_subscribers,
                 aggregated_publishers,
             )));
@@ -456,9 +484,6 @@ impl Session {
 
             let primitives = zwrite!(self.state).primitives.as_ref().unwrap().clone();
             primitives.send_close();
-            let mut state = self.state.write().unwrap();
-            state.queryables.clear();
-            state.primitives.take();
             
             Ok(())
         })
@@ -1518,14 +1543,14 @@ impl Session {
             Locality::Any => !route.is_empty(),
             Locality::Remote => {
                 if let Some(face) = zread!(self.state).primitives.as_ref() {
-                    route.values().any(|dir| !Arc::ptr_eq(&dir.0, &face.state))
+                    route.values().any(|dir| !Arc::ptr_eq(&dir.0, &face.state()))
                 } else {
                     !route.is_empty()
                 }
             }
             Locality::SessionLocal => {
                 if let Some(face) = zread!(self.state).primitives.as_ref() {
-                    route.values().any(|dir| Arc::ptr_eq(&dir.0, &face.state))
+                    route.values().any(|dir| Arc::ptr_eq(&dir.0, &face.state()))
                 } else {
                     false
                 }
@@ -1791,10 +1816,11 @@ impl Session {
             _ => 1,
         };
         task::spawn({
-            let state = self.state.clone();
+            let weak_state = ArcTrace::downgrade(&self.state);
             let zid = self.runtime.zid;
             async move {
                 task::sleep(timeout).await;
+                let Some(state) = weak_state.upgrade() else { return; };
                 let mut state = zwrite!(state);
                 if let Some(query) = state.queries.remove(&qid) {
                     std::mem::drop(state);

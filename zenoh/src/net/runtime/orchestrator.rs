@@ -811,12 +811,12 @@ impl Runtime {
     }
 
     pub(super) fn closing_session(session: &RuntimeSession) {
-        match session.runtime.upgrade().unwrap().whatami {
+        match session.runtime.upgrade().whatami {
             WhatAmI::Client => {
                 let runtime = session.runtime.clone();
-                session.runtime.upgrade().unwrap().spawn(async move {
+                session.runtime.upgrade().spawn(async move {
                     let mut delay = CONNECTION_RETRY_INITIAL_PERIOD;
-                    while runtime.upgrade().unwrap().start_client().await.is_err() {
+                    while runtime.upgrade().start_client().await.is_err() {
                         async_std::task::sleep(delay).await;
                         delay *= CONNECTION_RETRY_PERIOD_INCREASE_FACTOR;
                         if delay > CONNECTION_RETRY_MAX_PERIOD {
@@ -827,13 +827,13 @@ impl Runtime {
             }
             _ => {
                 if let Some(endpoint) = &*zread!(session.endpoint) {
-                    let peers = { session.runtime.upgrade().unwrap().config.lock().connect().endpoints().clone() };
+                    let peers = { session.runtime.upgrade().config.lock().connect().endpoints().clone() };
                     if peers.contains(endpoint) {
                         let endpoint = endpoint.clone();
                         let runtime = session.runtime.clone();
                         session
-                            .runtime.upgrade().unwrap()
-                            .spawn(async move { runtime.upgrade().unwrap().peer_connector(endpoint).await });
+                            .runtime.upgrade()
+                            .spawn(async move { runtime.upgrade().peer_connector(endpoint).await });
                     }
                 }
             }
