@@ -1986,10 +1986,10 @@ impl<'s> SessionDeclarations<'s, 'static> for Arc<Session> {
     ///     .unwrap();
     /// async_std::task::spawn(async move {
     ///     while let Ok(query) = queryable.recv_async().await {
-    ///         query.reply(Ok(Sample::try_from(
-    ///             "key/expression",
+    ///         query.reply(
+    ///             KeyExpr::try_from("key/expression").unwrap(),
     ///             "value",
-    ///         ).unwrap())).res().await.unwrap();
+    ///         ).res().await.unwrap();
     ///     }
     /// }).await;
     /// # })
@@ -2574,10 +2574,10 @@ pub trait SessionDeclarations<'s, 'a> {
     ///     .unwrap();
     /// async_std::task::spawn(async move {
     ///     while let Ok(query) = queryable.recv_async().await {
-    ///         query.reply(Ok(Sample::try_from(
-    ///             "key/expression",
+    ///         query.reply(
+    ///             KeyExpr::try_from("key/expression").unwrap(),
     ///             "value",
-    ///         ).unwrap())).res().await.unwrap();
+    ///         ).res().await.unwrap();
     ///     }
     /// }).await;
     /// # })

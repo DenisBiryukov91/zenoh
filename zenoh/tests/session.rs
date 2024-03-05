@@ -153,10 +153,17 @@ async fn test_session_qryrep(peer01: &Session, peer02: &Session, reliability: Re
         let c_msgs = msgs.clone();
         let qbl = ztimeout!(peer01
             .declare_queryable(key_expr)
-            .callback(move |sample| {
+            .callback(move |query| {
                 c_msgs.fetch_add(1, Ordering::Relaxed);
-                let rep = Sample::try_from(key_expr, vec![0u8; size]).unwrap();
-                task::block_on(async { ztimeout!(sample.reply(Ok(rep)).res_async()).unwrap() });
+                task::block_on(async {
+                    ztimeout!(query
+                        .reply(
+                            KeyExpr::try_from(key_expr).unwrap(),
+                            vec![0u8; size].to_vec()
+                        )
+                        .res_async())
+                    .unwrap()
+                });
             })
             .res_async())
         .unwrap();

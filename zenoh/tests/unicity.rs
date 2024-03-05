@@ -194,10 +194,17 @@ async fn test_unicity_qryrep(s01: &Session, s02: &Session, s03: &Session) {
         let c_msgs1 = msgs1.clone();
         let qbl1 = ztimeout!(s01
             .declare_queryable(key_expr)
-            .callback(move |sample| {
+            .callback(move |query| {
                 c_msgs1.fetch_add(1, Ordering::Relaxed);
-                let rep = Sample::try_from(key_expr, vec![0u8; size]).unwrap();
-                task::block_on(async { ztimeout!(sample.reply(Ok(rep)).res_async()).unwrap() });
+                task::block_on(async {
+                    ztimeout!(query
+                        .reply(
+                            KeyExpr::try_from(key_expr.to_owned()).unwrap(),
+                            vec![0u8; size].to_vec()
+                        )
+                        .res_async())
+                    .unwrap()
+                });
             })
             .res_async())
         .unwrap();
@@ -207,10 +214,17 @@ async fn test_unicity_qryrep(s01: &Session, s02: &Session, s03: &Session) {
         let c_msgs2 = msgs2.clone();
         let qbl2 = ztimeout!(s02
             .declare_queryable(key_expr)
-            .callback(move |sample| {
+            .callback(move |query| {
                 c_msgs2.fetch_add(1, Ordering::Relaxed);
-                let rep = Sample::try_from(key_expr, vec![0u8; size]).unwrap();
-                task::block_on(async { ztimeout!(sample.reply(Ok(rep)).res_async()).unwrap() });
+                task::block_on(async {
+                    ztimeout!(query
+                        .reply(
+                            KeyExpr::try_from(key_expr.to_owned()).unwrap(),
+                            vec![0u8; size].to_vec()
+                        )
+                        .res_async())
+                    .unwrap()
+                });
             })
             .res_async())
         .unwrap();
