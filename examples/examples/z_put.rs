@@ -24,7 +24,9 @@ async fn main() {
     let (config, key_expr, value) = parse_args();
 
     println!("Opening session...");
+    let now = std::time::SystemTime::now();
     let session = zenoh::open(config).res().await.unwrap();
+    println!("Opening session {:#?}.", now.elapsed());
 
     println!("Putting Data ('{key_expr}': '{value}')...");
     session.put(&key_expr, value).res().await.unwrap();
