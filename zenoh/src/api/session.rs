@@ -150,6 +150,7 @@ pub(crate) struct SessionState {
     pub(crate) aggregated_subscribers: Vec<OwnedKeyExpr>,
     pub(crate) aggregated_publishers: Vec<OwnedKeyExpr>,
     pub(crate) publisher_qos_tree: KeBoxTree<PublisherQoSConfig>,
+    pub(crate) namespace: String,
 }
 
 impl SessionState {
@@ -157,6 +158,7 @@ impl SessionState {
         aggregated_subscribers: Vec<OwnedKeyExpr>,
         aggregated_publishers: Vec<OwnedKeyExpr>,
         publisher_qos_tree: KeBoxTree<PublisherQoSConfig>,
+        namespace: String,
     ) -> SessionState {
         SessionState {
             primitives: None,
@@ -184,6 +186,7 @@ impl SessionState {
             aggregated_subscribers,
             aggregated_publishers,
             publisher_qos_tree,
+            namespace,
         }
     }
 }
@@ -219,10 +222,23 @@ impl SessionState {
         }
     }
 
+    pub(crate) fn remove_namespace_prefix<'a>(&self, key_expr: &'a str) -> &'a str {
+        if self.namespace.is_empty() || !key_expr.starts_with(&self.namespace) {
+            key_expr
+        } else {
+            &key_expr[self.namespace.len()..]
+        }
+    }
+
     pub(crate) fn remote_key_to_expr<'a>(&'a self, key_expr: &'a WireExpr) -> ZResult<KeyExpr<'a>> {
         if key_expr.scope == EMPTY_EXPR_ID {
-            Ok(unsafe { keyexpr::from_str_unchecked(key_expr.suffix.as_ref()) }.into())
+            // non-optimized ke, will always contain a prefix
+            Ok(unsafe {
+                keyexpr::from_str_unchecked(&self.remove_namespace_prefix(key_expr.suffix.as_ref()))
+            }
+            .into())
         } else if key_expr.suffix.is_empty() {
+            // fully optimized ke, namespace was already accounted for in non-optimized case above
             match self.get_remote_res(&key_expr.scope, key_expr.mapping) {
                 Some(Resource::Node(ResourceNode { key_expr, .. })) => Ok(key_expr.into()),
                 Some(Resource::Prefix { prefix }) => bail!(
@@ -234,6 +250,7 @@ impl SessionState {
                 None => bail!("Remote resource {} not found", key_expr.scope),
             }
         } else {
+            // partially optimized ke, namespace was already accounted for in non-optimized case above
             [
                 match self.get_remote_res(&key_expr.scope, key_expr.mapping) {
                     Some(Resource::Node(ResourceNode { key_expr, .. })) => key_expr.as_str(),
@@ -251,9 +268,12 @@ impl SessionState {
         &'a self,
         key_expr: &'a WireExpr,
     ) -> ZResult<KeyExpr<'a>> {
+        // non-optimized ke, will always contain a prefix
         if key_expr.scope == EMPTY_EXPR_ID {
-            key_expr.suffix.as_ref().try_into()
+            self.remove_namespace_prefix(key_expr.suffix.as_ref())
+                .try_into()
         } else if key_expr.suffix.is_empty() {
+            // fully optimized ke, namespace was already accounted for in non-optimized case above
             match self.get_local_res(&key_expr.scope) {
                 Some(Resource::Node(ResourceNode { key_expr, .. })) => Ok(key_expr.into()),
                 Some(Resource::Prefix { prefix }) => bail!(
@@ -527,6 +547,7 @@ pub(crate) struct SessionInner {
     pub(crate) state: RwLock<SessionState>,
     pub(crate) id: u16,
     owns_runtime: bool,
+    pub(crate) namespace: Option<OwnedKeyExpr>,
     task_controller: TaskController,
 }
 
@@ -676,11 +697,16 @@ impl Session {
             let router = runtime.router();
             let config = runtime.config().lock();
             let publisher_qos = config.0.qos().publication().clone();
+            let namespace = config.0.namespace().clone();
             drop(config);
             let state = RwLock::new(SessionState::new(
                 aggregated_subscribers,
                 aggregated_publishers,
                 publisher_qos.into(),
+                match &namespace {
+                    Some(ns) => ns.as_str().to_string() + "/",
+                    None => String::new(),
+                },
             ));
             let session = Session(Arc::new(SessionInner {
                 weak_counter: Mutex::new(0),
@@ -688,6 +714,7 @@ impl Session {
                 state,
                 id: SESSION_ID_COUNTER.fetch_add(1, Ordering::SeqCst),
                 owns_runtime,
+                namespace,
                 task_controller: TaskController::default(),
             }));
 
@@ -1257,6 +1284,23 @@ impl SessionInner {
         self.runtime.zid()
     }
 
+    pub(crate) fn add_namespace_prefix<'a>(&self, key: &'a str) -> std::borrow::Cow<'a, str> {
+        match &self.namespace {
+            Some(ns) => std::borrow::Cow::Owned((ns.join(key).unwrap().as_str()).to_string()),
+            None => std::borrow::Cow::Borrowed(key),
+        }
+    }
+
+    pub(crate) fn add_namespace_prefix_owned<'a>(
+        &self,
+        key: &'a str,
+    ) -> std::borrow::Cow<'static, str> {
+        match &self.namespace {
+            Some(ns) => std::borrow::Cow::Owned((ns.join(key).unwrap().as_str()).to_string()),
+            None => std::borrow::Cow::Owned(key.to_string()),
+        }
+    }
+
     pub(crate) fn declare_prefix<'a>(
         &'a self,
         prefix: &'a str,
@@ -1297,7 +1341,7 @@ impl SessionInner {
                             id: expr_id,
                             wire_expr: WireExpr {
                                 scope: 0,
-                                suffix: prefix.to_owned().into(),
+                                suffix: self.add_namespace_prefix_owned(prefix),
                                 mapping: Mapping::Sender,
                             },
                         }),
@@ -1987,7 +2031,14 @@ impl SessionInner {
                 if local_match.matching() {
                     Ok(local_match)
                 } else {
-                    self.matching_status_remote(key_expr, destination, matching_type)
+                    match &self.namespace {
+                        Some(ns) => self.matching_status_remote(
+                            &(ns / key_expr).into(),
+                            destination,
+                            matching_type,
+                        ),
+                        None => self.matching_status_remote(key_expr, destination, matching_type),
+                    }
                 }
             }
         }
@@ -2458,16 +2509,14 @@ impl SessionInner {
 
         let zid = self.zid();
 
+        let s = Arc::new(WeakSession::new(self));
         let query_inner = Arc::new(QueryInner {
             key_expr,
             parameters: parameters.to_owned().into(),
             qid,
             zid: zid.into(),
-            primitives: if local {
-                Arc::new(WeakSession::new(self))
-            } else {
-                primitives
-            },
+            primitives: if local { s.clone() } else { primitives },
+            session: Some(s),
         });
         let mut query = Query {
             inner: query_inner,

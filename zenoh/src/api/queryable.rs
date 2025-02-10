@@ -26,6 +26,7 @@ use zenoh_protocol::{
     zenoh::{self, reply::ReplyBody, Del, Put, ResponseBody},
 };
 use zenoh_result::ZResult;
+
 #[zenoh_macros::unstable]
 use {
     crate::api::query::ReplyKeyExpr, zenoh_config::wrappers::EntityGlobalId,
@@ -55,6 +56,7 @@ pub(crate) struct QueryInner {
     pub(crate) qid: RequestId,
     pub(crate) zid: ZenohIdProto,
     pub(crate) primitives: Arc<dyn Primitives>,
+    pub(crate) session: Option<Arc<WeakSession>>,
 }
 
 impl Drop for QueryInner {
@@ -267,7 +269,10 @@ impl Query {
             rid: self.inner.qid,
             wire_expr: WireExpr {
                 scope: 0,
-                suffix: std::borrow::Cow::Owned(sample.key_expr.into()),
+                suffix: match &self.inner.session {
+                    Some(s) => s.add_namespace_prefix_owned(&sample.key_expr),
+                    None => std::borrow::Cow::Owned(sample.key_expr.into()),
+                },
                 mapping: Mapping::Sender,
             },
             payload: ResponseBody::Reply(zenoh::Reply {

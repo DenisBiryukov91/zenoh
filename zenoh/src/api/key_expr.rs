@@ -561,7 +561,7 @@ impl<'a> KeyExpr<'a> {
             _ => false,
         }
     }
-    pub(crate) fn to_wire(&'a self, session: &SessionInner) -> WireExpr<'a> {
+    pub(crate) fn to_wire(&'a self, session: &'a SessionInner) -> WireExpr<'a> {
         match &self.0 {
             KeyExprInner::Wire {
                 key_expr,
@@ -571,7 +571,13 @@ impl<'a> KeyExpr<'a> {
                 session_id,
             } if session.id == *session_id => WireExpr {
                 scope: *expr_id,
-                suffix: std::borrow::Cow::Borrowed(&key_expr.as_str()[((*prefix_len) as usize)..]),
+                suffix: if *prefix_len == 0 {
+                    // non-optimized ke for local session - prepend namespace
+                    session.add_namespace_prefix(&key_expr.as_str())
+                } else {
+                    // declared ke - namespace part (or its superset) was already converted into id
+                    std::borrow::Cow::Borrowed(&key_expr.as_str()[((*prefix_len) as usize)..])
+                },
                 mapping: *mapping,
             },
             KeyExprInner::BorrowedWire {
@@ -582,18 +588,24 @@ impl<'a> KeyExpr<'a> {
                 session_id,
             } if session.id == *session_id => WireExpr {
                 scope: *expr_id,
-                suffix: std::borrow::Cow::Borrowed(&key_expr.as_str()[((*prefix_len) as usize)..]),
+                suffix: if *prefix_len == 0 {
+                    // non-optimized ke for local session - prepend namespace
+                    session.add_namespace_prefix(&key_expr.as_str())
+                } else {
+                    // declared ke - namespace part (or its superset) was already converted into id
+                    std::borrow::Cow::Borrowed(&key_expr.as_str()[((*prefix_len) as usize)..])
+                },
                 mapping: *mapping,
             },
             KeyExprInner::Owned(key_expr) | KeyExprInner::Wire { key_expr, .. } => WireExpr {
                 scope: 0,
-                suffix: std::borrow::Cow::Borrowed(key_expr.as_str()),
+                suffix: session.add_namespace_prefix(key_expr.as_str()),
                 mapping: Mapping::Sender,
             },
             KeyExprInner::Borrowed(key_expr) | KeyExprInner::BorrowedWire { key_expr, .. } => {
                 WireExpr {
                     scope: 0,
-                    suffix: std::borrow::Cow::Borrowed(key_expr.as_str()),
+                    suffix: session.add_namespace_prefix(key_expr.as_str()),
                     mapping: Mapping::Sender,
                 }
             }
