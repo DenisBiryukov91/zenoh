@@ -608,13 +608,13 @@ impl Timed for PeriodicQuery {
         let states = &mut *lock;
         if let Some(state) = states.sequenced_states.get_mut(&self.source_id) {
             state.pending_queries += 1;
-            let query_expr = KE_ADV_PREFIX
+            let query_expr = &states.key_expr
+                / KE_ADV_PREFIX
                 / KE_STAR
                 / &self.source_id.zid().into_keyexpr()
                 / &KeyExpr::try_from(self.source_id.eid().to_string()).unwrap()
                 / KE_STARSTAR
-                / KE_AT
-                / &states.key_expr;
+                / KE_AT;
             let seq_num_range = seq_num_range(state.last_delivered.map(|s| s + 1), None);
 
             let session = states.session.clone();
@@ -712,13 +712,13 @@ impl<Handler> AdvancedSubscriber<Handler> {
                             && !state.pending_samples.is_empty()
                         {
                             state.pending_queries += 1;
-                            let query_expr = KE_ADV_PREFIX
+                            let query_expr = &key_expr
+                                / KE_ADV_PREFIX
                                 / KE_STAR
                                 / &source_id.zid().into_keyexpr()
                                 / &KeyExpr::try_from(source_id.eid().to_string()).unwrap()
                                 / KE_STARSTAR
-                                / KE_AT
-                                / &key_expr;
+                                / KE_AT;
                             let seq_num_range =
                                 seq_num_range(state.last_delivered.map(|s| s + 1), None);
                             drop(lock);
@@ -774,7 +774,7 @@ impl<Handler> AdvancedSubscriber<Handler> {
             let _ = conf
                 .session
                 .get(Selector::from((
-                    KE_ADV_PREFIX / KE_STARSTAR / KE_AT / &key_expr,
+                    &key_expr / KE_ADV_PREFIX / KE_STARSTAR / KE_AT,
                     params,
                 )))
                 .callback({
@@ -968,14 +968,13 @@ impl<Handler> AdvancedSubscriber<Handler> {
                 };
 
                 Some(
-                    conf
-                .session
-                .liveliness()
-                .declare_subscriber(KE_ADV_PREFIX / KE_PUB / KE_STARSTAR / KE_AT / &key_expr)
-                // .declare_subscriber(keformat!(ke_liveliness_all::formatter(), zid = 0, eid = 0, remaining = key_expr).unwrap())
-                .history(true)
-                .callback(live_callback)
-                .wait()?,
+                    conf.session
+                        .liveliness()
+                        .declare_subscriber(&key_expr / KE_ADV_PREFIX / KE_PUB / KE_STARSTAR / KE_AT)
+                        // .declare_subscriber(keformat!(ke_liveliness_all::formatter(), zid = 0, eid = 0, remaining = key_expr).unwrap())
+                        .history(true)
+                        .callback(live_callback)
+                        .wait()?,
                 )
             } else {
                 None
@@ -985,7 +984,7 @@ impl<Handler> AdvancedSubscriber<Handler> {
         };
 
         let heartbeat_subscriber = if retransmission.is_some_and(|r| r.heartbeat.is_some()) {
-            let ke_heartbeat_sub = KE_ADV_PREFIX / KE_PUB / KE_STARSTAR / KE_AT / &key_expr;
+            let ke_heartbeat_sub = &key_expr / KE_ADV_PREFIX / KE_PUB / KE_STARSTAR / KE_AT;
             let statesref = statesref.clone();
             let heartbeat_sub = conf
                 .session
@@ -1083,19 +1082,19 @@ impl<Handler> AdvancedSubscriber<Handler> {
         };
 
         if conf.liveliness {
-            let prefix = KE_ADV_PREFIX
+            let suffix = KE_ADV_PREFIX
                 / KE_SUB
                 / &subscriber.id().zid().into_keyexpr()
                 / &KeyExpr::try_from(subscriber.id().eid().to_string()).unwrap();
-            let prefix = match meta {
-                Some(meta) => prefix / &meta / KE_AT,
+            let suffix = match meta {
+                Some(meta) => suffix / &meta / KE_AT,
                 // We need this empty chunk because af a routing matching bug
-                _ => prefix / KE_EMPTY / KE_AT,
+                _ => suffix / KE_EMPTY / KE_AT,
             };
             let token = conf
                 .session
                 .liveliness()
-                .declare_token(prefix / &key_expr)
+                .declare_token(&key_expr / &suffix)
                 .wait()?;
             zlock!(statesref).token = Some(token)
         }
@@ -1158,7 +1157,7 @@ impl<Handler> AdvancedSubscriber<Handler> {
     #[zenoh_macros::unstable]
     pub fn detect_publishers(&self) -> LivelinessSubscriberBuilder<'_, '_, DefaultHandler> {
         self.subscriber.session().liveliness().declare_subscriber(
-            KE_ADV_PREFIX / KE_PUB / KE_STARSTAR / KE_AT / self.subscriber.key_expr(),
+            self.subscriber.key_expr() / KE_ADV_PREFIX / KE_PUB / KE_STARSTAR / KE_AT,
         )
     }
 
