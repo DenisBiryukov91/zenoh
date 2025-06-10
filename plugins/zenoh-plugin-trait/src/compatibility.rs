@@ -204,6 +204,7 @@ impl Display for Compatibility {
         if let Some(plugin_version) = &self.plugin_version {
             writeln!(f, "Plugin version: {}", plugin_version)?;
         }
+        writeln!(f, "Lock version: {}", self.cargo_lock.len())?;
         Ok(())
     }
 }
