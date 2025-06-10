@@ -48,6 +48,8 @@ pub use plugin::{
 };
 pub use vtable::{PluginLoaderVersion, PluginVTable, PLUGIN_LOADER_VERSION};
 
+include!(concat!(env!("OUT_DIR"), "/cargo_lock.rs"));
+
 #[doc(hidden)]
 pub mod export {
     pub use git_version;

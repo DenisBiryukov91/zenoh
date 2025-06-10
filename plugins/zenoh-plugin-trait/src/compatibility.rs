@@ -14,7 +14,7 @@
 
 use std::fmt::Display;
 
-use crate::{Plugin, PluginInstance, PluginStartArgs, PluginVTable};
+use crate::{Plugin, PluginInstance, PluginStartArgs, PluginVTable, CARGO_LOCK};
 
 pub trait StructVersion {
     /// The version of the structure which implements this trait. After any change in the structure or its dependencies
@@ -63,6 +63,7 @@ pub struct Compatibility {
     instance_version: Option<PluginStructVersion>,
     plugin_version: Option<&'static str>,
     plugin_long_version: Option<&'static str>,
+    cargo_lock: &'static str,
 }
 
 impl Compatibility {
@@ -86,6 +87,7 @@ impl Compatibility {
             instance_version,
             plugin_version,
             plugin_long_version,
+            cargo_lock: CARGO_LOCK,
         }
     }
     pub fn with_empty_plugin_version<
@@ -105,6 +107,7 @@ impl Compatibility {
             instance_version,
             plugin_version: None,
             plugin_long_version: None,
+            cargo_lock: CARGO_LOCK,
         }
     }
     pub fn plugin_version(&self) -> Option<&'static str> {
@@ -152,7 +155,12 @@ impl Compatibility {
             &mut self.plugin_long_version,
             &mut other.plugin_long_version,
         );
+        Self::compare_cargo_lock(&mut result, self.cargo_lock, other.cargo_lock);
         result
+    }
+
+    fn compare_cargo_lock(result: &mut bool, a: &'static str, b: &'static str) {
+        *result = *result && (a == b);
     }
 
     // Utility function for compare single field

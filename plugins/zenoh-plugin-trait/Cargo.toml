@@ -36,3 +36,6 @@ zenoh-result = { workspace = true }
 zenoh-util = { workspace = true }
 zenoh-config = { workspace = true }
 zenoh-keyexpr = { workspace = true, features = ["internal", "unstable"] }
+
+[build-dependencies]
+project-root = "0.2.2"
