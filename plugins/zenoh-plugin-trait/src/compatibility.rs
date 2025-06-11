@@ -143,9 +143,11 @@ impl Compatibility {
                 let sign = match change.tag() {
                     ChangeTag::Delete => "-",
                     ChangeTag::Insert => "+",
-                    ChangeTag::Equal => " ",
+                    ChangeTag::Equal => "",
                 };
-                out += &format!("{}{}", sign, change);
+                if !sign.is_empty() {
+                    out += &format!("{}{}", sign, change);
+                }
             }
         }
         out

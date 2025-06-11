@@ -12,8 +12,8 @@ use std::{env, fs, path::Path};
 //   ZettaScale Zenoh Team, <zenoh@zettascale.tech>
 //
 fn main() {
-    let cargo_lock_path = project_root::get_project_root().unwrap();
-    let cargo_lock = fs::read_to_string(cargo_lock_path.join("cargo.lock")).unwrap();
+    let cargo_lock_path = project_root::get_project_root().unwrap().join("cargo.lock");
+    let cargo_lock = fs::read_to_string(cargo_lock_path.clone()).unwrap();
     let cargo_lock = cargo_lock.replace(r#"""#, r#"\""#);
     let out_dir = env::var_os("OUT_DIR").unwrap();
     let dest_path = Path::new(&out_dir).join("cargo_lock.rs");
@@ -22,4 +22,8 @@ fn main() {
         format!(r#"const CARGO_LOCK: &str = "{}";"#, cargo_lock),
     )
     .unwrap();
+    println!(
+        "cargo:rerun-if-changed={}",
+        cargo_lock_path.to_str().unwrap()
+    );
 }
