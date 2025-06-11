@@ -78,9 +78,8 @@ impl<StartArgs: PluginStartArgs, Instance: PluginInstance>
         );
         if !plugin_compatibility_record.compare(&mut host_compatibility_record) {
             bail!(
-                "Plugin compatibility mismatch:\nHost:\n{}Plugin:\n{}",
-                host_compatibility_record,
-                plugin_compatibility_record
+                "{}",
+                plugin_compatibility_record.print_difference(&host_compatibility_record)
             );
         }
         let load_plugin =

@@ -14,6 +14,8 @@
 
 use std::fmt::Display;
 
+use similar::{ChangeTag, TextDiff};
+
 use crate::{Plugin, PluginInstance, PluginStartArgs, PluginVTable, CARGO_LOCK};
 
 pub trait StructVersion {
@@ -63,7 +65,7 @@ pub struct Compatibility {
     instance_version: Option<PluginStructVersion>,
     plugin_version: Option<&'static str>,
     plugin_long_version: Option<&'static str>,
-    cargo_lock: &'static str,
+    cargo_lock: Option<&'static str>,
 }
 
 impl Compatibility {
@@ -87,7 +89,7 @@ impl Compatibility {
             instance_version,
             plugin_version,
             plugin_long_version,
-            cargo_lock: CARGO_LOCK,
+            cargo_lock: Some(CARGO_LOCK),
         }
     }
     pub fn with_empty_plugin_version<
@@ -107,7 +109,7 @@ impl Compatibility {
             instance_version,
             plugin_version: None,
             plugin_long_version: None,
-            cargo_lock: CARGO_LOCK,
+            cargo_lock: Some(CARGO_LOCK),
         }
     }
     pub fn plugin_version(&self) -> Option<&'static str> {
@@ -115,6 +117,38 @@ impl Compatibility {
     }
     pub fn plugin_long_version(&self) -> Option<&'static str> {
         self.plugin_long_version
+    }
+
+    pub fn print_difference(&self, other: &Self) -> String {
+        let mut out = "Plugin compatibility mismatch:".to_string();
+        if let (Some(a), Some(b)) = (&self.rust_version, &other.rust_version) {
+            out += &format!("\nRust version: {}, {}", a, b);
+        }
+        if let (Some(a), Some(b)) = (&self.vtable_version, &other.vtable_version) {
+            out += &format!("\nVTable version: {}, {}", a, b);
+        }
+        if let (Some(a), Some(b)) = (&self.start_args_version, &other.start_args_version) {
+            out += &format!("\nStartArgs version: {}, {}", a, b);
+        }
+        if let (Some(a), Some(b)) = (&self.instance_version, &other.instance_version) {
+            out += &format!("\nInstance version: {}, {}", a, b);
+        }
+        if let (Some(a), Some(b)) = (self.plugin_version, other.plugin_version) {
+            out += &format!("\nPlugin version: {}, {}", a, b);
+        }
+        if let (Some(a), Some(b)) = (self.cargo_lock, other.cargo_lock) {
+            out += "\n";
+            let diff = TextDiff::from_lines(a, b);
+            for change in diff.iter_all_changes() {
+                let sign = match change.tag() {
+                    ChangeTag::Delete => "-",
+                    ChangeTag::Insert => "+",
+                    ChangeTag::Equal => " ",
+                };
+                out += &format!("{}{}", sign, change);
+            }
+        }
+        out
     }
     /// Compares fields if both are Some, otherwise skips the comparison.
     /// Returns true if all the comparisons returned true, otherwise false.
@@ -155,12 +189,16 @@ impl Compatibility {
             &mut self.plugin_long_version,
             &mut other.plugin_long_version,
         );
-        Self::compare_cargo_lock(&mut result, self.cargo_lock, other.cargo_lock);
+        Self::compare_cargo_lock(&mut result, &mut self.cargo_lock, &mut other.cargo_lock);
         result
     }
 
-    fn compare_cargo_lock(result: &mut bool, a: &'static str, b: &'static str) {
-        *result = *result && (a == b);
+    fn compare_cargo_lock(
+        result: &mut bool,
+        a: &mut Option<&'static str>,
+        b: &mut Option<&'static str>,
+    ) {
+        Self::compare_field_fn(result, a, b, |a, b| a == b)
     }
 
     // Utility function for compare single field
@@ -204,7 +242,6 @@ impl Display for Compatibility {
         if let Some(plugin_version) = &self.plugin_version {
             writeln!(f, "Plugin version: {}", plugin_version)?;
         }
-        writeln!(f, "Lock version: {}", self.cargo_lock.len())?;
         Ok(())
     }
 }
