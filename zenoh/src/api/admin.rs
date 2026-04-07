@@ -226,7 +226,7 @@ pub(crate) fn init(session: WeakSession) {
                 None,
                 None,
             ) {
-                tracing::error!("Unable to publish transport event: {}", e);
+                tracing::debug!("Unable to publish transport event: {}", e);
             }
         }
     });
@@ -280,10 +280,10 @@ pub(crate) fn init(session: WeakSession) {
                     None,
                     None,
                 ) {
-                    tracing::error!("Unable to publish link event: {}", e);
+                    tracing::debug!("Unable to publish link event: {}", e);
                 }
             } else {
-                tracing::warn!("Unable to find transport for link event: {}", transport_zid);
+                tracing::debug!("Unable to find transport for link event: {}", transport_zid);
             }
         }
     });
